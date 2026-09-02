@@ -4,7 +4,7 @@ import { Config } from './config.types';
 
 export const configValidationSchema = Joi.object<Config>({
   PORT: Joi.number().port().required(),
-  NODE_ENV: Joi.string().valid('development', 'production').required(),
+  NODE_ENV: Joi.string().valid('development', 'production', 'test').required(),
 
   /**
    * Cookie secret
@@ -33,4 +33,19 @@ export const configValidationSchema = Joi.object<Config>({
   POSTGRES_SYNCHRONIZE: Joi.boolean().optional().default(false),
   POSTGRES_LOGGING: Joi.boolean().optional().default(false),
   POSTGRES_MIGRATIONS_RUN: Joi.boolean().optional().default(false),
+
+  /**
+   * SMTP email options
+   */
+  SMTP_HOST: Joi.string().hostname().required(),
+  SMTP_PORT: Joi.number().port().required(),
+  SMTP_USER: Joi.string().allow('').optional().default(''),
+  SMTP_PASSWORD: Joi.string().allow('').optional().default(''),
+  SMTP_FROM: Joi.string().email().required(),
+
+  /**
+   * Application URLs
+   */
+  APP_BASE_URL: Joi.string().uri().required(),
+  CORS_ORIGINS: Joi.string().optional().default(''),
 });

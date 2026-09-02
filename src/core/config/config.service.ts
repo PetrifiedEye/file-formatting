@@ -6,7 +6,7 @@ import { Config } from './config.types';
 @Injectable()
 export class ConfigService extends NestConfigService {
   get<T extends keyof Config>(key: T): string {
-    const value = super.get(key);
-    return value as string;
+    const value = super.get<Config[T]>(key);
+    return String(value);
   }
 }

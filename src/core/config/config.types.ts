@@ -1,6 +1,6 @@
 export interface Config {
   PORT: number;
-  NODE_ENV: 'development' | 'production';
+  NODE_ENV: 'development' | 'production' | 'test';
 
   /**
    * Cookie secret
@@ -29,4 +29,19 @@ export interface Config {
   POSTGRES_SYNCHRONIZE?: boolean;
   POSTGRES_LOGGING?: boolean;
   POSTGRES_MIGRATIONS_RUN?: boolean;
+
+  /**
+   * SMTP email options
+   */
+  SMTP_HOST: string;
+  SMTP_PORT: number;
+  SMTP_USER?: string;
+  SMTP_PASSWORD?: string;
+  SMTP_FROM: string;
+
+  /**
+   * Application URLs
+   */
+  APP_BASE_URL: string;
+  CORS_ORIGINS?: string;
 }
