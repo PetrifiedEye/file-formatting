@@ -11,7 +11,7 @@ import { DataSource } from 'typeorm';
  * this file exists solely so the CLI can load the same connection
  * settings from .env without booting the whole Nest application.
  */
-export const dataSource = new DataSource({
+const dataSource = new DataSource({
   type: 'postgres',
   host: process.env.POSTGRES_HOST,
   port: Number(process.env.POSTGRES_PORT),

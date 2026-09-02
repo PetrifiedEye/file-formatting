@@ -1,0 +1,285 @@
+openapi: 3.0.3
+info:
+  title: File Formatting API — User Registration
+  version: 1.0.0
+  description: |
+    Registration and email-confirmation endpoints for feature `001-user-registration`.
+    Sign-in, sessions, and password recovery are out of scope.
+
+servers:
+  - url: http://localhost:{port}
+    variables:
+      port:
+        default: '3000'
+
+tags:
+  - name: Registration
+    description: Guest registration and confirmation
+  - name: Admin Settings
+    description: Administrator confirmation and password policy
+
+paths:
+  /auth/register:
+    post:
+      tags: [Registration]
+      operationId: register
+      summary: Register a new account
+      description: |
+        Creates an account (confirmation off) or a pending registration (confirmation on).
+        Client-facing responses never reveal whether the email is already registered (FR-015).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Registration accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          description: Invalid email or password format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/register/confirm/code:
+    post:
+      tags: [Registration]
+      operationId: confirmRegistrationByCode
+      summary: Confirm registration with OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmCodeRequest'
+      responses:
+        '200':
+          description: Account activated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmSuccessResponse'
+        '400':
+          description: Invalid, expired, or exhausted attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No pending registration for email (generic message)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/register/confirm/link:
+    get:
+      tags: [Registration]
+      operationId: confirmRegistrationByLink
+      summary: Confirm registration via magic link
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 32
+      responses:
+        '200':
+          description: Account activated (JSON) or redirect HTML in browser clients
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmSuccessResponse'
+        '400':
+          description: Invalid, expired, or already-used link
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/register/resend:
+    post:
+      tags: [Registration]
+      operationId: resendConfirmation
+      summary: Resend confirmation email
+      description: Minimum 60 s between sends; max 5 emails per email per 10 min.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendRequest'
+      responses:
+        '200':
+          description: Request accepted (may or may not send — anti-enumeration)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResendResponse'
+        '429':
+          description: Resend too soon or email cap exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/settings/confirmation-policy:
+    get:
+      tags: [Admin Settings]
+      operationId: getConfirmationPolicy
+      summary: Read confirmation and password policy
+      responses:
+        '200':
+          description: Current policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmationPolicyResponse'
+    patch:
+      tags: [Admin Settings]
+      operationId: updateConfirmationPolicy
+      summary: Update confirmation and password policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateConfirmationPolicyRequest'
+      responses:
+        '200':
+          description: Updated policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmationPolicyResponse'
+
+components:
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: guest@example.com
+        password:
+          type: string
+          minLength: 8
+          example: securepass
+
+    RegisterResponse:
+      type: object
+      required: [message, confirmationRequired]
+      properties:
+        message:
+          type: string
+          example: If this email is eligible, registration instructions have been sent.
+        confirmationRequired:
+          type: boolean
+          description: True when admin enabled registration confirmation
+
+    ConfirmCodeRequest:
+      type: object
+      required: [email, code]
+      properties:
+        email:
+          type: string
+          format: email
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+          example: '123456'
+
+    ConfirmSuccessResponse:
+      type: object
+      required: [message, accountReady]
+      properties:
+        message:
+          type: string
+          example: Your account is ready. You may sign in with your credentials.
+        accountReady:
+          type: boolean
+          example: true
+
+    ResendRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+
+    ResendResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: If a pending registration exists, a new confirmation email has been sent.
+
+    ConfirmationPolicyResponse:
+      type: object
+      properties:
+        registrationConfirmationEnabled:
+          type: boolean
+        passwordRecoveryConfirmationEnabled:
+          type: boolean
+        signInConfirmationEnabled:
+          type: boolean
+        passwordMinLength:
+          type: integer
+          minimum: 8
+        passwordRequireUppercase:
+          type: boolean
+        passwordRequireDigit:
+          type: boolean
+        passwordRequireSpecial:
+          type: boolean
+
+    UpdateConfirmationPolicyRequest:
+      type: object
+      properties:
+        registrationConfirmationEnabled:
+          type: boolean
+        passwordRecoveryConfirmationEnabled:
+          type: boolean
+        signInConfirmationEnabled:
+          type: boolean
+        passwordMinLength:
+          type: integer
+          minimum: 8
+        passwordRequireUppercase:
+          type: boolean
+        passwordRequireDigit:
+          type: boolean
+        passwordRequireSpecial:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      required: [statusCode, message]
+      properties:
+        statusCode:
+          type: integer
+        message:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        error:
+          type: string

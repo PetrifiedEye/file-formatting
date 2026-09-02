@@ -9,6 +9,8 @@ npm run start:dev    # Development with hot reload
 npm run start:prod   # Production
 npm run build        # Build
 npm run lint         # Lint & fix
+npm run lint:check   # Lint without auto-fix
+npm run verify       # Typecheck + lint (no fix) + unit tests
 npm run test         # Unit tests
 npm run test:e2e     # E2E tests
 ```
@@ -32,6 +34,7 @@ src/
 PostgreSQL and TypeORM are already wired in. Use them for new modules — no extra setup.
 
 - **Local Postgres:** `docker compose up -d` (image and credentials from `.env` / `.env.example`)
+- **Database UI (Adminer):** http://localhost:8081 — System: **PostgreSQL**, Server: **postgres**, credentials from `.env`
 - **Connection:** `DatabaseModule` (`src/core/database`) is imported in `AppModule`
 - **Entities:** any `*.entity.ts` under `src/` is auto-loaded
 - **Repositories:** `TypeOrmModule.forFeature([YourEntity])` in a feature module, then `@InjectRepository(YourEntity)`
