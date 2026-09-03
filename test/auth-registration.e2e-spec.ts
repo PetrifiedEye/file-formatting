@@ -11,7 +11,8 @@ import {
   StorageDriver,
 } from 'typeorm-transactional';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
+import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 
 import { AppModule } from '../src/core/app/app.module';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
@@ -29,6 +30,7 @@ describe('Auth Registration (e2e)', () => {
   let auditRepository: Repository<RegistrationAuditEvent>;
   let settingsRepository: Repository<SystemSettings>;
   let challengeRepository: Repository<ConfirmationChallenge>;
+  let throttlerStorage: ThrottlerStorageService;
 
   beforeAll(async () => {
     initializeTransactionalContext({ storageDriver: StorageDriver.AUTO });
@@ -53,6 +55,9 @@ describe('Auth Registration (e2e)', () => {
     challengeRepository = moduleFixture.get(
       getRepositoryToken(ConfirmationChallenge),
     );
+    throttlerStorage = moduleFixture.get<ThrottlerStorage>(
+      ThrottlerStorage,
+    ) as ThrottlerStorageService;
   });
 
   afterAll(async () => {
@@ -60,6 +65,8 @@ describe('Auth Registration (e2e)', () => {
   });
 
   beforeEach(async () => {
+    throttlerStorage.storage.clear();
+
     await challengeRepository.createQueryBuilder().delete().execute();
     await auditRepository.createQueryBuilder().delete().execute();
     await usersRepository.createQueryBuilder().delete().execute();
@@ -272,10 +279,16 @@ describe('Auth Registration (e2e)', () => {
             where: { email },
           });
           const challenge = await challengeRepository.findOneOrFail({
-            where: { userId: user.id },
+            where: {
+              userId: user.id,
+              invalidatedAt: IsNull(),
+              consumedAt: IsNull(),
+            },
           });
           const past = new Date(Date.now() - 120_000);
           await challengeRepository.update(challenge.id, { lastSentAt: past });
+
+          throttlerStorage.storage.clear();
 
           await request(app.getHttpServer())
             .post('/auth/register/resend')
@@ -286,11 +299,17 @@ describe('Auth Registration (e2e)', () => {
 
       const user = await usersRepository.findOneOrFail({ where: { email } });
       const challenge = await challengeRepository.findOneOrFail({
-        where: { userId: user.id },
+        where: {
+          userId: user.id,
+          invalidatedAt: IsNull(),
+          consumedAt: IsNull(),
+        },
       });
       await challengeRepository.update(challenge.id, {
         lastSentAt: new Date(Date.now() - 120_000),
       });
+
+      throttlerStorage.storage.clear();
 
       await request(app.getHttpServer())
         .post('/auth/register/resend')

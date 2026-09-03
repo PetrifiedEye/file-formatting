@@ -46,6 +46,15 @@ export class ConfirmationChallengeService {
     });
   }
 
+  async findByLinkTokenHash(
+    linkTokenHash: string,
+  ): Promise<ConfirmationChallenge | null> {
+    return this.challengeRepository.findOne({
+      where: { linkTokenHash },
+      relations: ['user'],
+    });
+  }
+
   async invalidateActiveForUser(userId: string): Promise<void> {
     const active = await this.findActiveByUserId(userId);
     if (active) {

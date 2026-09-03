@@ -9,6 +9,7 @@ import { HealthModule } from '@/core/health/health.module';
 import { ThrottlerModule } from '@/core/throttler/throttler.module';
 
 import { AuthModule } from '@/modules/auth/auth.module';
+import { RbacModule } from '@/modules/rbac/rbac.module';
 import { SettingsModule } from '@/modules/settings/settings.module';
 import { UsersModule } from '@/modules/users/users.module';
 
@@ -22,6 +23,7 @@ import { UsersModule } from '@/modules/users/users.module';
     UsersModule,
     SettingsModule,
     AuthModule,
+    RbacModule,
   ],
   providers: [
     {

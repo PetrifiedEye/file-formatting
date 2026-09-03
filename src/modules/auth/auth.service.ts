@@ -260,7 +260,7 @@ export class AuthService {
 
     const linkTokenHash = hashSecret(token);
     const challenge =
-      await this.challengeService.findActiveByLinkTokenHash(linkTokenHash);
+      await this.challengeService.findByLinkTokenHash(linkTokenHash);
 
     if (!challenge) {
       await this.auditService.record(
@@ -278,6 +278,32 @@ export class AuthService {
 
     const user = challenge.user;
     const normalizedEmail = user.email;
+
+    // A link that already activated the account is safe to replay
+    // idempotently (e.g. the user double-clicked the email link).
+    if (challenge.consumedAt) {
+      if (user.status === UserStatus.ACTIVE) {
+        return { message: CONFIRM_SUCCESS_MESSAGE, accountReady: true };
+      }
+
+      await this.recordConfirmFailure(
+        normalizedEmail,
+        user.id,
+        meta,
+        'invalid_link',
+      );
+      throw new BadRequestException(GENERIC_CONFIRM_FAILURE);
+    }
+
+    if (challenge.invalidatedAt) {
+      await this.recordConfirmFailure(
+        normalizedEmail,
+        user.id,
+        meta,
+        'invalid_link',
+      );
+      throw new BadRequestException(GENERIC_CONFIRM_FAILURE);
+    }
 
     if (user.status === UserStatus.ACTIVE) {
       return { message: CONFIRM_SUCCESS_MESSAGE, accountReady: true };
