@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AuthModule } from '@/modules/auth/auth.module';
@@ -27,7 +27,7 @@ const RbacEntitiesModule = TypeOrmModule.forFeature([
 ]);
 
 @Module({
-  imports: [RbacEntitiesModule, AuthModule],
+  imports: [RbacEntitiesModule, forwardRef(() => AuthModule)],
   controllers: [RolesController, PermissionsController, GrantsController],
   providers: [
     RbacAuditService,
