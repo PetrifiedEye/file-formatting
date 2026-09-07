@@ -26,7 +26,7 @@ import {
   LoginAuditOutcome,
 } from './entities/login-audit-event.entity';
 import { LoginAuditService } from './login-audit.service';
-import { SessionService, IssuedSession } from './session.service';
+import { TokenService } from './token.service';
 import {
   LoginChallengeService,
   LoginChallengeVerifyFailure,
@@ -79,10 +79,16 @@ const GENERIC_LOGIN_VERIFY_FAILURE =
 const GENERIC_LOGIN_VERIFY_NOT_FOUND =
   'No pending sign-in verification found for this email.';
 const LOCKOUT_MESSAGE = 'Too many failed attempts. Try again later.';
+const REFRESH_FAILURE_MESSAGE = 'Authentication required';
+
+export interface IssuedTokens {
+  accessToken: string;
+  refreshToken: string;
+}
 
 export interface LoginResult {
   response: LoginResponseDto;
-  session?: IssuedSession;
+  tokens?: IssuedTokens;
 }
 
 @Injectable()
@@ -94,9 +100,18 @@ export class AuthService {
     private readonly challengeService: ConfirmationChallengeService,
     private readonly confirmationMailService: ConfirmationMailService,
     private readonly loginAuditService: LoginAuditService,
-    private readonly sessionService: SessionService,
+    private readonly tokenService: TokenService,
     private readonly loginChallengeService: LoginChallengeService,
   ) {}
+
+  private async issueTokens(userId: string): Promise<IssuedTokens> {
+    const [accessToken, refreshToken] = await Promise.all([
+      this.tokenService.signAccessToken(userId),
+      this.tokenService.signRefreshToken(userId),
+    ]);
+
+    return { accessToken, refreshToken };
+  }
 
   async login(dto: LoginRequestDto, meta: RequestMeta): Promise<LoginResult> {
     const normalizedEmail = normalizeEmail(dto.email);
@@ -189,18 +204,14 @@ export class AuthService {
       };
     }
 
-    const session = await this.sessionService.issue(
-      user,
-      meta.ipAddress,
-      meta.userAgent,
-    );
+    const tokens = await this.issueTokens(user.id);
 
     return {
       response: {
         message: LOGIN_SUCCESS_MESSAGE,
         verificationRequired: false,
       },
-      session,
+      tokens,
     };
   }
 
@@ -278,11 +289,7 @@ export class AuthService {
       throw new BadRequestException(GENERIC_LOGIN_VERIFY_FAILURE);
     }
 
-    const session = await this.sessionService.issue(
-      user,
-      meta.ipAddress,
-      meta.userAgent,
-    );
+    const tokens = await this.issueTokens(user.id);
 
     await this.loginAuditService.record(
       LoginAuditEventType.LOGIN_VERIFICATION_ATTEMPT,
@@ -300,7 +307,7 @@ export class AuthService {
         message: LOGIN_SUCCESS_MESSAGE,
         verificationRequired: false,
       },
-      session,
+      tokens,
     };
   }
 
@@ -320,32 +327,71 @@ export class AuthService {
     );
   }
 
-  async logout(
-    rawToken: string | undefined,
+  logout(): { message: string } {
+    return { message: LOGOUT_MESSAGE };
+  }
+
+  async refresh(
+    rawRefreshToken: string | undefined,
     meta: RequestMeta,
-  ): Promise<{ message: string }> {
-    if (rawToken) {
-      const session = await this.sessionService.validate(rawToken);
-
-      if (session) {
-        await this.sessionService.invalidate(session.id);
-
-        const user = await this.usersService.findById(session.userId);
-
-        await this.loginAuditService.record(
-          LoginAuditEventType.LOGOUT,
-          LoginAuditOutcome.SUCCESS,
-          {
-            normalizedEmail: user?.email ?? '',
-            userId: session.userId,
-            ipAddress: meta.ipAddress,
-            userAgent: meta.userAgent,
-          },
-        );
-      }
+  ): Promise<IssuedTokens> {
+    if (!rawRefreshToken) {
+      await this.recordRefreshFailure(undefined, meta, 'missing');
+      throw new UnauthorizedException(REFRESH_FAILURE_MESSAGE);
     }
 
-    return { message: LOGOUT_MESSAGE };
+    let sub: string;
+    try {
+      ({ sub } = await this.tokenService.verifyRefreshToken(rawRefreshToken));
+    } catch {
+      await this.recordRefreshFailure(undefined, meta, 'invalid');
+      throw new UnauthorizedException(REFRESH_FAILURE_MESSAGE);
+    }
+
+    const user = await this.usersService.findById(sub);
+
+    if (!user) {
+      await this.recordRefreshFailure(sub, meta, 'user_not_found');
+      throw new UnauthorizedException(REFRESH_FAILURE_MESSAGE);
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      await this.recordRefreshFailure(user.id, meta, 'user_inactive');
+      throw new UnauthorizedException(REFRESH_FAILURE_MESSAGE);
+    }
+
+    const tokens = await this.issueTokens(user.id);
+
+    await this.loginAuditService.record(
+      LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
+      LoginAuditOutcome.SUCCESS,
+      {
+        normalizedEmail: user.email,
+        userId: user.id,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+      },
+    );
+
+    return tokens;
+  }
+
+  private async recordRefreshFailure(
+    userId: string | undefined,
+    meta: RequestMeta,
+    failureReason: string,
+  ): Promise<void> {
+    await this.loginAuditService.record(
+      LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
+      LoginAuditOutcome.FAILURE,
+      {
+        normalizedEmail: 'unknown',
+        userId,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+        failureReason,
+      },
+    );
   }
 
   async register(

@@ -14,7 +14,6 @@ import {
   LoginAuditOutcome,
 } from './entities/login-audit-event.entity';
 import { LoginAuditService } from './login-audit.service';
-import { SessionService } from './session.service';
 import { ConfirmationMailService } from './confirmation-mail.service';
 import type { RequestMeta } from './auth.service';
 import { normalizeEmail } from './utils/email-normalizer';
@@ -44,7 +43,6 @@ export class PasswordResetService {
     private readonly challengeRepository: Repository<PasswordResetChallenge>,
     private readonly usersService: UsersService,
     private readonly settingsService: SettingsService,
-    private readonly sessionService: SessionService,
     private readonly confirmationMailService: ConfirmationMailService,
     private readonly loginAuditService: LoginAuditService,
   ) {}
@@ -163,7 +161,6 @@ export class PasswordResetService {
 
     const passwordHash = await hashPassword(dto.newPassword);
     await this.usersService.updatePassword(user, passwordHash);
-    await this.sessionService.invalidateAllForUser(user.id);
 
     await this.loginAuditService.record(
       LoginAuditEventType.PASSWORD_RESET_ATTEMPT,

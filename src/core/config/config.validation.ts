@@ -12,6 +12,12 @@ export const configValidationSchema = Joi.object<Config>({
   COOKIE_SECRET: Joi.string().required(),
 
   /**
+   * JWT session auth secrets
+   */
+  JWT_ACCESS_SECRET: Joi.string().required(),
+  JWT_REFRESH_SECRET: Joi.string().required(),
+
+  /**
    * Health check options
    */
   HEALTH_CHECK_ENABLED: Joi.boolean().optional().default(false),

@@ -8,7 +8,6 @@ import {
   Query,
   Req,
   Res,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -27,10 +26,8 @@ import type { FastifyReply } from 'fastify';
 
 import { ConfigService } from '@/core/config/config.service';
 
-import { AuthService } from './auth.service';
+import { AuthService, IssuedTokens } from './auth.service';
 import { PasswordResetService } from './password-reset.service';
-import { SessionAuthGuard } from './guards/session-auth.guard';
-import { IssuedSession } from './session.service';
 import { RegisterRequestDto } from './dto/register-request.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
 import { ConfirmCodeRequestDto } from './dto/confirm-code-request.dto';
@@ -43,7 +40,10 @@ import { LoginVerifyRequestDto } from './dto/login-verify-request.dto';
 import { PasswordResetRequestDto } from './dto/password-reset-request.dto';
 import { PasswordResetConfirmDto } from './dto/password-reset-confirm.dto';
 
-const SESSION_COOKIE_NAME = 'session';
+const ACCESS_TOKEN_COOKIE_NAME = 'access_token';
+const REFRESH_TOKEN_COOKIE_NAME = 'refresh_token';
+const ACCESS_TOKEN_MAX_AGE_SECONDS = 15 * 60;
+const REFRESH_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 function extractMeta(req: {
   ip?: string;
@@ -67,18 +67,28 @@ export class AuthController {
     private readonly configService: ConfigService,
   ) {}
 
-  private setSessionCookie(reply: FastifyReply, session: IssuedSession) {
-    reply.setCookie(SESSION_COOKIE_NAME, session.token, {
+  private setAuthCookies(reply: FastifyReply, tokens: IssuedTokens) {
+    const secure = this.configService.get('NODE_ENV') === 'production';
+
+    reply.setCookie(ACCESS_TOKEN_COOKIE_NAME, tokens.accessToken, {
       httpOnly: true,
-      secure: this.configService.get('NODE_ENV') === 'production',
+      secure,
       sameSite: 'lax',
       path: '/',
-      expires: session.session.expiresAt,
+      maxAge: ACCESS_TOKEN_MAX_AGE_SECONDS,
+    });
+    reply.setCookie(REFRESH_TOKEN_COOKIE_NAME, tokens.refreshToken, {
+      httpOnly: true,
+      secure,
+      sameSite: 'lax',
+      path: '/auth',
+      maxAge: REFRESH_TOKEN_MAX_AGE_SECONDS,
     });
   }
 
-  private clearSessionCookie(reply: FastifyReply) {
-    reply.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+  private clearAuthCookies(reply: FastifyReply) {
+    reply.clearCookie(ACCESS_TOKEN_COOKIE_NAME, { path: '/' });
+    reply.clearCookie(REFRESH_TOKEN_COOKIE_NAME, { path: '/auth' });
   }
 
   @Post('register')
@@ -173,13 +183,13 @@ export class AuthController {
     },
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<LoginResponseDto> {
-    const { response, session } = await this.authService.login(
+    const { response, tokens } = await this.authService.login(
       dto,
       extractMeta(req),
     );
 
-    if (session) {
-      this.setSessionCookie(reply, session);
+    if (tokens) {
+      this.setAuthCookies(reply, tokens);
     }
 
     return response;
@@ -204,13 +214,13 @@ export class AuthController {
     },
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<LoginResponseDto> {
-    const { response, session } = await this.authService.verifyLogin(
+    const { response, tokens } = await this.authService.verifyLogin(
       dto,
       extractMeta(req),
     );
 
-    if (session) {
-      this.setSessionCookie(reply, session);
+    if (tokens) {
+      this.setAuthCookies(reply, tokens);
     }
 
     return response;
@@ -235,16 +245,44 @@ export class AuthController {
     },
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<LoginResponseDto> {
-    const { response, session } = await this.authService.verifyLoginByLink(
+    const { response, tokens } = await this.authService.verifyLoginByLink(
       token,
       extractMeta(req),
     );
 
-    if (session) {
-      this.setSessionCookie(reply, session);
+    if (tokens) {
+      this.setAuthCookies(reply, tokens);
     }
 
     return response;
+  }
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Renew the session using the refresh token' })
+  @ApiOkResponse({ description: 'Session refreshed' })
+  @ApiUnauthorizedResponse({
+    description: 'Missing, invalid, or expired refresh token',
+  })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async refresh(
+    @Req()
+    req: {
+      ip?: string;
+      headers: Record<string, string | string[] | undefined>;
+      cookies?: Record<string, string | undefined>;
+    },
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<{ message: string }> {
+    const tokens = await this.authService.refresh(
+      req.cookies?.[REFRESH_TOKEN_COOKIE_NAME],
+      extractMeta(req),
+    );
+
+    this.setAuthCookies(reply, tokens);
+
+    return { message: 'Session refreshed.' };
   }
 
   @Post('password-reset/request')
@@ -298,25 +336,12 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(SessionAuthGuard)
-  @ApiOperation({ summary: 'Log out and invalidate the current session' })
+  @ApiOperation({ summary: 'Log out and clear the session cookies' })
   @ApiOkResponse({ description: 'Signed out' })
-  @ApiUnauthorizedResponse({ description: 'No valid session' })
-  async logout(
-    @Req()
-    req: {
-      ip?: string;
-      headers: Record<string, string | string[] | undefined>;
-      cookies?: Record<string, string | undefined>;
-    },
-    @Res({ passthrough: true }) reply: FastifyReply,
-  ): Promise<{ message: string }> {
-    const result = await this.authService.logout(
-      req.cookies?.[SESSION_COOKIE_NAME],
-      extractMeta(req),
-    );
+  logout(@Res({ passthrough: true }) reply: FastifyReply): { message: string } {
+    const result = this.authService.logout();
 
-    this.clearSessionCookie(reply);
+    this.clearAuthCookies(reply);
 
     return result;
   }

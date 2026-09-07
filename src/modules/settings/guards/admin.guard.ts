@@ -7,7 +7,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 
-import { SessionAuthGuard } from '@/modules/auth/guards/session-auth.guard';
+import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
 
 const ADMIN_ROLE = 'admin';
 
@@ -18,12 +18,12 @@ interface RequestWithUser {
 @Injectable()
 export class AdminGuard implements CanActivate {
   constructor(
-    @Inject(forwardRef(() => SessionAuthGuard))
-    private readonly sessionAuthGuard: SessionAuthGuard,
+    @Inject(forwardRef(() => JwtAuthGuard))
+    private readonly jwtAuthGuard: JwtAuthGuard,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    await this.sessionAuthGuard.canActivate(context);
+    await this.jwtAuthGuard.canActivate(context);
 
     const request = context.switchToHttp().getRequest<RequestWithUser>();
     const roles = request.user?.roles ?? [];

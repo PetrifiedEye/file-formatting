@@ -28,7 +28,7 @@ import {
   LoginAuditOutcome,
 } from './entities/login-audit-event.entity';
 import { LoginAuditService } from './login-audit.service';
-import { SessionService } from './session.service';
+import { TokenService, TokenVerificationError } from './token.service';
 import { LoginChallengeService } from './login-challenge.service';
 import { hashPassword } from './utils/password-hasher';
 
@@ -85,11 +85,10 @@ describe('AuthService', () => {
     record: jest.fn(),
   };
 
-  const sessionService = {
-    issue: jest.fn(),
-    validate: jest.fn(),
-    invalidate: jest.fn(),
-    invalidateAllForUser: jest.fn(),
+  const tokenService = {
+    signAccessToken: jest.fn(),
+    signRefreshToken: jest.fn(),
+    verifyRefreshToken: jest.fn(),
   };
 
   const loginChallengeService = {
@@ -110,6 +109,8 @@ describe('AuthService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     settingsService.getSettings.mockResolvedValue(defaultSettings);
+    tokenService.signAccessToken.mockResolvedValue('access-token');
+    tokenService.signRefreshToken.mockResolvedValue('refresh-token');
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -120,7 +121,7 @@ describe('AuthService', () => {
         { provide: ConfirmationChallengeService, useValue: challengeService },
         { provide: ConfirmationMailService, useValue: confirmationMailService },
         { provide: LoginAuditService, useValue: loginAuditService },
-        { provide: SessionService, useValue: sessionService },
+        { provide: TokenService, useValue: tokenService },
         { provide: LoginChallengeService, useValue: loginChallengeService },
       ],
     }).compile();
@@ -245,7 +246,7 @@ describe('AuthService', () => {
       passwordHash = await hashPassword('CorrectHorse123!');
     });
 
-    it('issues a session for correct credentials', async () => {
+    it('issues tokens for correct credentials', async () => {
       const user = {
         id: 'user-1',
         email: 'user@example.com',
@@ -253,10 +254,6 @@ describe('AuthService', () => {
         status: UserStatus.ACTIVE,
       };
       usersService.findByNormalizedEmail.mockResolvedValue(user);
-      sessionService.issue.mockResolvedValue({
-        token: 'raw-token',
-        session: { id: 'session-1', expiresAt: new Date() },
-      });
 
       const result = await service.login(
         { email: 'user@example.com', password: 'CorrectHorse123!' },
@@ -267,12 +264,12 @@ describe('AuthService', () => {
         message: 'Signed in.',
         verificationRequired: false,
       });
-      expect(result.session).toBeDefined();
-      expect(sessionService.issue).toHaveBeenCalledWith(
-        user,
-        '127.0.0.1',
-        undefined,
-      );
+      expect(result.tokens).toEqual({
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      });
+      expect(tokenService.signAccessToken).toHaveBeenCalledWith('user-1');
+      expect(tokenService.signRefreshToken).toHaveBeenCalledWith('user-1');
       expect(loginAuditService.record).toHaveBeenCalledWith(
         LoginAuditEventType.LOGIN_ATTEMPT,
         LoginAuditOutcome.SUCCESS,
@@ -295,7 +292,7 @@ describe('AuthService', () => {
         ),
       ).rejects.toThrow(UnauthorizedException);
 
-      expect(sessionService.issue).not.toHaveBeenCalled();
+      expect(tokenService.signAccessToken).not.toHaveBeenCalled();
       expect(loginAuditService.record).toHaveBeenCalledWith(
         LoginAuditEventType.LOGIN_ATTEMPT,
         LoginAuditOutcome.FAILURE,
@@ -346,7 +343,7 @@ describe('AuthService', () => {
       expect((pendingError as ForbiddenException).getResponse()).toEqual(
         expect.objectContaining({ canResend: true }),
       );
-      expect(sessionService.issue).not.toHaveBeenCalled();
+      expect(tokenService.signAccessToken).not.toHaveBeenCalled();
     });
   });
 
@@ -382,8 +379,8 @@ describe('AuthService', () => {
       );
 
       expect(result.response.verificationRequired).toBe(true);
-      expect(result.session).toBeUndefined();
-      expect(sessionService.issue).not.toHaveBeenCalled();
+      expect(result.tokens).toBeUndefined();
+      expect(tokenService.signAccessToken).not.toHaveBeenCalled();
       expect(
         confirmationMailService.sendLoginVerificationEmail,
       ).toHaveBeenCalledWith('user@example.com', '123456', 'link-token');
@@ -391,7 +388,7 @@ describe('AuthService', () => {
   });
 
   describe('verifyLogin', () => {
-    it('issues a session for a correct code', async () => {
+    it('issues tokens for a correct code', async () => {
       usersService.findByNormalizedEmail.mockResolvedValue({
         id: 'user-1',
         email: 'user@example.com',
@@ -400,17 +397,16 @@ describe('AuthService', () => {
         ok: true,
         challenge: { userId: 'user-1' },
       });
-      sessionService.issue.mockResolvedValue({
-        token: 'raw-token',
-        session: { id: 'session-1', expiresAt: new Date() },
-      });
 
       const result = await service.verifyLogin({
         email: 'user@example.com',
         code: '123456',
       });
 
-      expect(result.session).toBeDefined();
+      expect(result.tokens).toEqual({
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      });
       expect(result.response.message).toBe('Signed in.');
     });
 
@@ -511,10 +507,6 @@ describe('AuthService', () => {
         lockedUntil: null,
       };
       usersService.findByNormalizedEmail.mockResolvedValue(user);
-      sessionService.issue.mockResolvedValue({
-        token: 'raw-token',
-        session: { id: 'session-1', expiresAt: new Date() },
-      });
 
       await service.login(
         { email: 'user@example.com', password: 'CorrectHorse123!' },
@@ -526,36 +518,98 @@ describe('AuthService', () => {
   });
 
   describe('logout', () => {
-    it('invalidates the session and logs the outcome', async () => {
-      sessionService.validate.mockResolvedValue({
-        id: 'session-1',
-        userId: 'user-1',
-      });
+    it('always returns the signed-out message', () => {
+      const result = service.logout();
+
+      expect(result).toEqual({ message: 'Signed out.' });
+    });
+  });
+
+  describe('refresh', () => {
+    it('issues a fresh token pair for a valid refresh token and active user', async () => {
+      tokenService.verifyRefreshToken.mockResolvedValue({ sub: 'user-1' });
       usersService.findById.mockResolvedValue({
         id: 'user-1',
         email: 'user@example.com',
+        status: UserStatus.ACTIVE,
       });
 
-      const result = await service.logout('raw-token', {
+      const result = await service.refresh('raw-refresh-token', {
         ipAddress: '127.0.0.1',
       });
 
-      expect(result.message).toBe('Signed out.');
-      expect(sessionService.invalidate).toHaveBeenCalledWith('session-1');
+      expect(result).toEqual({
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      });
       expect(loginAuditService.record).toHaveBeenCalledWith(
-        LoginAuditEventType.LOGOUT,
+        LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
         LoginAuditOutcome.SUCCESS,
         expect.objectContaining({ userId: 'user-1' }),
       );
     });
 
-    it('is a no-op when there is no valid session', async () => {
-      sessionService.validate.mockResolvedValue(null);
+    it('rejects a missing refresh token without issuing cookies', async () => {
+      await expect(service.refresh(undefined, {})).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
 
-      const result = await service.logout('bad-token', {});
+      expect(tokenService.signAccessToken).not.toHaveBeenCalled();
+      expect(loginAuditService.record).toHaveBeenCalledWith(
+        LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
+        LoginAuditOutcome.FAILURE,
+        expect.objectContaining({ failureReason: 'missing' }),
+      );
+    });
 
-      expect(result.message).toBe('Signed out.');
-      expect(sessionService.invalidate).not.toHaveBeenCalled();
+    it('rejects a malformed/expired/bad-signature refresh token', async () => {
+      tokenService.verifyRefreshToken.mockRejectedValue(
+        new TokenVerificationError('expired'),
+      );
+
+      await expect(service.refresh('bad-token', {})).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+
+      expect(tokenService.signAccessToken).not.toHaveBeenCalled();
+      expect(loginAuditService.record).toHaveBeenCalledWith(
+        LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
+        LoginAuditOutcome.FAILURE,
+        expect.objectContaining({ failureReason: 'invalid' }),
+      );
+    });
+
+    it('rejects when the user no longer exists', async () => {
+      tokenService.verifyRefreshToken.mockResolvedValue({ sub: 'user-1' });
+      usersService.findById.mockResolvedValue(null);
+
+      await expect(
+        service.refresh('raw-refresh-token', {}),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+
+      expect(loginAuditService.record).toHaveBeenCalledWith(
+        LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
+        LoginAuditOutcome.FAILURE,
+        expect.objectContaining({ failureReason: 'user_not_found' }),
+      );
+    });
+
+    it('rejects when the user is not active', async () => {
+      tokenService.verifyRefreshToken.mockResolvedValue({ sub: 'user-1' });
+      usersService.findById.mockResolvedValue({
+        id: 'user-1',
+        status: UserStatus.PENDING_CONFIRMATION,
+      });
+
+      await expect(
+        service.refresh('raw-refresh-token', {}),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+
+      expect(loginAuditService.record).toHaveBeenCalledWith(
+        LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
+        LoginAuditOutcome.FAILURE,
+        expect.objectContaining({ failureReason: 'user_inactive' }),
+      );
     });
   });
 });

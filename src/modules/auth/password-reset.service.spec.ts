@@ -14,7 +14,6 @@ import { SettingsService } from '@/modules/settings/settings.service';
 import { PasswordResetChallenge } from './entities/password-reset-challenge.entity';
 import { PasswordResetService } from './password-reset.service';
 import { LoginAuditService } from './login-audit.service';
-import { SessionService } from './session.service';
 import { ConfirmationMailService } from './confirmation-mail.service';
 import { hashSecret } from './utils/confirmation-token';
 
@@ -49,10 +48,6 @@ describe('PasswordResetService', () => {
     getSettings: jest.fn(),
   };
 
-  const sessionService = {
-    invalidateAllForUser: jest.fn(),
-  };
-
   const confirmationMailService = {
     sendPasswordResetEmail: jest.fn(),
   };
@@ -82,7 +77,6 @@ describe('PasswordResetService', () => {
         },
         { provide: UsersService, useValue: usersService },
         { provide: SettingsService, useValue: settingsService },
-        { provide: SessionService, useValue: sessionService },
         { provide: ConfirmationMailService, useValue: confirmationMailService },
         { provide: LoginAuditService, useValue: loginAuditService },
       ],
@@ -133,7 +127,7 @@ describe('PasswordResetService', () => {
   });
 
   describe('confirmReset', () => {
-    it('applies the new password, invalidates sessions, and consumes the challenge', async () => {
+    it('applies the new password and consumes the challenge', async () => {
       const code = '123456';
       usersService.findByNormalizedEmail.mockResolvedValue({
         id: 'user-1',
@@ -157,9 +151,6 @@ describe('PasswordResetService', () => {
 
       expect(result.message).toContain('reset');
       expect(usersService.updatePassword).toHaveBeenCalled();
-      expect(sessionService.invalidateAllForUser).toHaveBeenCalledWith(
-        'user-1',
-      );
     });
 
     it('rejects a weak new password without touching the challenge', async () => {
