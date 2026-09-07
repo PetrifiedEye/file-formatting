@@ -21,7 +21,7 @@ import {
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 
-import { SessionAuthGuard } from '@/modules/auth/guards/session-auth.guard';
+import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
 
 import { RequirePermission } from './decorators/require-permission.decorator';
 import { CreateRoleDto } from './dto/create-role.dto';
@@ -32,7 +32,7 @@ import { RolesService } from './roles.service';
 
 @ApiTags('RBAC')
 @Controller('rbac/roles')
-@UseGuards(SessionAuthGuard, PermissionGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 @RequirePermission('rbac', 'manage')
 export class RolesController {
   constructor(private readonly rolesService: RolesService) {}

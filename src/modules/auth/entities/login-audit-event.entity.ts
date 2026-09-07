@@ -16,6 +16,8 @@ export enum LoginAuditEventType {
   LOGOUT = 'logout',
   PASSWORD_RESET_REQUESTED = 'password_reset_requested',
   PASSWORD_RESET_ATTEMPT = 'password_reset_attempt',
+  ACCESS_CHECK_FAILED = 'access_check_failed',
+  TOKEN_REFRESH_ATTEMPT = 'token_refresh_attempt',
 }
 
 export enum LoginAuditOutcome {

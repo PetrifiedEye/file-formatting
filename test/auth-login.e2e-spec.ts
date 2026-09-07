@@ -19,20 +19,28 @@ import { createHash } from 'crypto';
 import { AppModule } from '../src/core/app/app.module';
 import { ConfigService } from '../src/core/config/config.service';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
-import { Session } from '../src/modules/auth/entities/session.entity';
 import { LoginChallenge } from '../src/modules/auth/entities/login-challenge.entity';
 import { PasswordResetChallenge } from '../src/modules/auth/entities/password-reset-challenge.entity';
 import { LoginAuditEvent } from '../src/modules/auth/entities/login-audit-event.entity';
 import { SystemSettings } from '../src/modules/settings/entities/system-settings.entity';
 
-function extractSessionCookie(setCookieHeader: string[] | undefined): string {
+function extractCookie(
+  setCookieHeader: string[] | undefined,
+  name: string,
+): string {
   const cookie = (setCookieHeader ?? []).find((value) =>
-    value.startsWith('session='),
+    value.startsWith(`${name}=`),
   );
   if (!cookie) {
-    throw new Error('No session cookie found in response');
+    throw new Error(`No ${name} cookie found in response`);
   }
   return cookie.split(';')[0];
+}
+
+function extractAuthCookies(setCookieHeader: string[] | undefined): string {
+  const access = extractCookie(setCookieHeader, 'access_token');
+  const refresh = extractCookie(setCookieHeader, 'refresh_token');
+  return `${access}; ${refresh}`;
 }
 
 function bruteForceOtp(otpHash: string): string {
@@ -49,7 +57,6 @@ function bruteForceOtp(otpHash: string): string {
 describe('Auth Login (e2e)', () => {
   let app: INestApplication<App>;
   let usersRepository: Repository<User>;
-  let sessionRepository: Repository<Session>;
   let loginChallengeRepository: Repository<LoginChallenge>;
   let passwordResetChallengeRepository: Repository<PasswordResetChallenge>;
   let loginAuditRepository: Repository<LoginAuditEvent>;
@@ -80,7 +87,6 @@ describe('Auth Login (e2e)', () => {
     await app.getHttpAdapter().getInstance().ready();
 
     usersRepository = moduleFixture.get(getRepositoryToken(User));
-    sessionRepository = moduleFixture.get(getRepositoryToken(Session));
     loginChallengeRepository = moduleFixture.get(
       getRepositoryToken(LoginChallenge),
     );
@@ -111,7 +117,6 @@ describe('Auth Login (e2e)', () => {
   beforeEach(async () => {
     clearThrottler();
 
-    await sessionRepository.createQueryBuilder().delete().execute();
     await loginChallengeRepository.createQueryBuilder().delete().execute();
     await passwordResetChallengeRepository
       .createQueryBuilder()
@@ -135,7 +140,7 @@ describe('Auth Login (e2e)', () => {
   }
 
   describe('Login', () => {
-    it('logs in with correct credentials and issues a session cookie', async () => {
+    it('logs in with correct credentials and issues access/refresh cookies', async () => {
       const email = `login1-${Date.now()}@example.com`;
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
@@ -150,22 +155,24 @@ describe('Auth Login (e2e)', () => {
         verificationRequired: false,
       });
 
-      const cookie = extractSessionCookie(
-        loginResponse.headers['set-cookie'] as unknown as string[],
-      );
-      expect(cookie).toContain('session=');
+      const setCookie = loginResponse.headers['set-cookie'] as unknown as
+        | string[]
+        | undefined;
+      const accessCookie = extractCookie(setCookie, 'access_token');
+      const refreshCookie = extractCookie(setCookie, 'refresh_token');
+      expect(accessCookie).toContain('access_token=');
+      expect(refreshCookie).toContain('refresh_token=');
+
+      const cookies = `${accessCookie}; ${refreshCookie}`;
 
       const logoutResponse = await request(app.getHttpServer())
         .post('/auth/logout')
-        .set('Cookie', cookie)
+        .set('Cookie', cookies)
         .expect(200);
 
       expect(logoutResponse.body.message).toBe('Signed out.');
 
-      await request(app.getHttpServer())
-        .post('/auth/logout')
-        .set('Cookie', cookie)
-        .expect(401);
+      await request(app.getHttpServer()).post('/auth/logout').expect(200);
     });
 
     it('rejects wrong password with a generic 401', async () => {
@@ -274,10 +281,15 @@ describe('Auth Login (e2e)', () => {
         .expect(200);
 
       expect(verifyResponse.body.message).toBe('Signed in.');
-      const cookie = extractSessionCookie(
-        verifyResponse.headers['set-cookie'] as unknown as string[],
+      const setCookie = verifyResponse.headers['set-cookie'] as unknown as
+        | string[]
+        | undefined;
+      expect(extractCookie(setCookie, 'access_token')).toContain(
+        'access_token=',
       );
-      expect(cookie).toContain('session=');
+      expect(extractCookie(setCookie, 'refresh_token')).toContain(
+        'refresh_token=',
+      );
     });
 
     it('rejects an expired verification code', async () => {
@@ -419,19 +431,11 @@ describe('Auth Login (e2e)', () => {
       );
     });
 
-    it('confirms with a valid code, changes the password, and invalidates other sessions', async () => {
+    it('confirms with a valid code and changes the password', async () => {
       const email = `reset2-${Date.now()}@example.com`;
       const oldPassword = 'CorrectHorse123!';
       const newPassword = 'NewCorrectHorse456!';
       await registerActiveUser(email, oldPassword);
-
-      const loginResponse = await request(app.getHttpServer())
-        .post('/auth/login')
-        .send({ email, password: oldPassword })
-        .expect(200);
-      const activeCookie = extractSessionCookie(
-        loginResponse.headers['set-cookie'] as unknown as string[],
-      );
 
       await request(app.getHttpServer())
         .post('/auth/password-reset/request')
@@ -460,11 +464,6 @@ describe('Auth Login (e2e)', () => {
         .post('/auth/login')
         .send({ email, password: newPassword })
         .expect(200);
-
-      await request(app.getHttpServer())
-        .post('/auth/logout')
-        .set('Cookie', activeCookie)
-        .expect(401);
     });
 
     it('rejects an expired or already-used code without changing the password', async () => {
@@ -497,9 +496,16 @@ describe('Auth Login (e2e)', () => {
     });
   });
 
-  describe('Route protection', () => {
+  describe('Route protection (JwtAuthGuard)', () => {
     it('rejects an unauthenticated request with 401', async () => {
       await request(app.getHttpServer()).get('/rbac/roles').expect(401);
+    });
+
+    it('rejects a tampered access token cookie with 401', async () => {
+      await request(app.getHttpServer())
+        .get('/rbac/roles')
+        .set('Cookie', 'access_token=garbage')
+        .expect(401);
     });
 
     it('rejects a valid non-admin session with 403', async () => {
@@ -511,17 +517,17 @@ describe('Auth Login (e2e)', () => {
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
-      const cookie = extractSessionCookie(
+      const cookies = extractAuthCookies(
         loginResponse.headers['set-cookie'] as unknown as string[],
       );
 
       await request(app.getHttpServer())
         .get('/rbac/roles')
-        .set('Cookie', cookie)
+        .set('Cookie', cookies)
         .expect(403);
     });
 
-    it('rejects an expired/invalidated session with 401', async () => {
+    it('rejects a deactivated user even with a still-valid access token', async () => {
       const email = `protect2-${Date.now()}@example.com`;
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
@@ -530,19 +536,162 @@ describe('Auth Login (e2e)', () => {
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
-      const cookie = extractSessionCookie(
+      const cookies = extractAuthCookies(
         loginResponse.headers['set-cookie'] as unknown as string[],
       );
 
-      await request(app.getHttpServer())
-        .post('/auth/logout')
-        .set('Cookie', cookie)
-        .expect(200);
+      await usersRepository.update(
+        { email },
+        { status: UserStatus.PENDING_CONFIRMATION },
+      );
 
       await request(app.getHttpServer())
         .get('/rbac/roles')
-        .set('Cookie', cookie)
+        .set('Cookie', cookies)
         .expect(401);
+    });
+  });
+
+  describe('Session renewal (/auth/refresh)', () => {
+    it('rotates access and refresh tokens for a valid refresh cookie', async () => {
+      const email = `refresh1-${Date.now()}@example.com`;
+      const password = 'CorrectHorse123!';
+      await registerActiveUser(email, password);
+
+      const loginResponse = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password })
+        .expect(200);
+      const refreshCookie = extractCookie(
+        loginResponse.headers['set-cookie'] as unknown as string[],
+        'refresh_token',
+      );
+
+      const refreshResponse = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', refreshCookie)
+        .expect(200);
+
+      expect(refreshResponse.body).toEqual({ message: 'Session refreshed.' });
+      const newSetCookie = refreshResponse.headers['set-cookie'] as unknown as
+        | string[]
+        | undefined;
+      const newAccessCookie = extractCookie(newSetCookie, 'access_token');
+      const newRefreshCookie = extractCookie(newSetCookie, 'refresh_token');
+
+      await request(app.getHttpServer())
+        .get('/rbac/roles')
+        .set('Cookie', `${newAccessCookie}; ${newRefreshCookie}`)
+        .expect(403); // authenticated (non-admin), proving the new access token works
+    });
+
+    it('rejects a missing refresh cookie with 401 and sets no cookies', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .expect(401);
+
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          statusCode: 401,
+          message: 'Authentication required',
+        }),
+      );
+      expect(response.headers['set-cookie']).toBeUndefined();
+    });
+
+    it('rejects a malformed refresh cookie with 401 and sets no cookies', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', 'refresh_token=garbage')
+        .expect(401);
+
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          statusCode: 401,
+          message: 'Authentication required',
+        }),
+      );
+      expect(response.headers['set-cookie']).toBeUndefined();
+    });
+
+    it('rejects a deactivated user even with a valid refresh token', async () => {
+      const email = `refresh2-${Date.now()}@example.com`;
+      const password = 'CorrectHorse123!';
+      await registerActiveUser(email, password);
+
+      const loginResponse = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password })
+        .expect(200);
+      const refreshCookie = extractCookie(
+        loginResponse.headers['set-cookie'] as unknown as string[],
+        'refresh_token',
+      );
+
+      await usersRepository.update(
+        { email },
+        { status: UserStatus.PENDING_CONFIRMATION },
+      );
+
+      const response = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', refreshCookie)
+        .expect(401);
+
+      expect(response.headers['set-cookie']).toBeUndefined();
+    });
+  });
+
+  describe('Sign-out (/auth/logout)', () => {
+    it('clears both cookies and is a no-op with no cookies present', async () => {
+      const email = `logout1-${Date.now()}@example.com`;
+      const password = 'CorrectHorse123!';
+      await registerActiveUser(email, password);
+
+      const loginResponse = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password })
+        .expect(200);
+      const cookies = extractAuthCookies(
+        loginResponse.headers['set-cookie'] as unknown as string[],
+      );
+
+      const logoutResponse = await request(app.getHttpServer())
+        .post('/auth/logout')
+        .set('Cookie', cookies)
+        .expect(200);
+
+      expect(logoutResponse.body).toEqual({ message: 'Signed out.' });
+      const clearedCookies = logoutResponse.headers[
+        'set-cookie'
+      ] as unknown as string[];
+      expect(
+        clearedCookies.some(
+          (c) => c.startsWith('access_token=') && c.includes('Max-Age=0'),
+        ),
+      ).toBe(true);
+      expect(
+        clearedCookies.some(
+          (c) => c.startsWith('refresh_token=') && c.includes('Max-Age=0'),
+        ),
+      ).toBe(true);
+
+      await request(app.getHttpServer()).post('/auth/logout').expect(200);
+    });
+
+    it('leaves an emptied cookie jar unable to reach a protected resource', async () => {
+      const email = `logout2-${Date.now()}@example.com`;
+      const password = 'CorrectHorse123!';
+      await registerActiveUser(email, password);
+
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password })
+        .expect(200);
+
+      await request(app.getHttpServer()).post('/auth/logout').expect(200);
+
+      await request(app.getHttpServer()).get('/rbac/roles').expect(401);
     });
   });
 });

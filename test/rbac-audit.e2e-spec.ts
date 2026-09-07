@@ -34,10 +34,10 @@ const TEST_PASSWORD = 'CorrectHorse123!';
 
 function extractSessionCookie(setCookieHeader: string[] | undefined): string {
   const cookie = (setCookieHeader ?? []).find((value) =>
-    value.startsWith('session='),
+    value.startsWith('access_token='),
   );
   if (!cookie) {
-    throw new Error('No session cookie found in response');
+    throw new Error('No access_token cookie found in response');
   }
   return cookie.split(';')[0];
 }

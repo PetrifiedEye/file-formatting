@@ -1,14 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
 
 import { ConfigService } from '@/core/config/config.service';
-import { UserRole } from '@/modules/rbac/entities/user-role.entity';
 
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { PasswordResetService } from './password-reset.service';
-import { SessionAuthGuard } from './guards/session-auth.guard';
-import { SessionService } from './session.service';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -21,6 +17,7 @@ describe('AuthController', () => {
     logout: jest.fn(),
     verifyLogin: jest.fn(),
     verifyLoginByLink: jest.fn(),
+    refresh: jest.fn(),
   };
 
   const passwordResetService = {
@@ -42,12 +39,6 @@ describe('AuthController', () => {
         { provide: AuthService, useValue: authService },
         { provide: PasswordResetService, useValue: passwordResetService },
         { provide: ConfigService, useValue: configService },
-        SessionAuthGuard,
-        { provide: SessionService, useValue: { validate: jest.fn() } },
-        {
-          provide: getRepositoryToken(UserRole),
-          useValue: { find: jest.fn() },
-        },
       ],
     }).compile();
 
@@ -76,10 +67,10 @@ describe('AuthController', () => {
 
   const req = { ip: '127.0.0.1', headers: {} } as never;
 
-  it('sets the session cookie when login issues a session', async () => {
+  it('sets both auth cookies when login issues tokens', async () => {
     authService.login.mockResolvedValue({
       response: { message: 'Signed in.', verificationRequired: false },
-      session: { token: 'raw-token', session: { expiresAt: new Date() } },
+      tokens: { accessToken: 'access-token', refreshToken: 'refresh-token' },
     });
     const reply = makeReply();
 
@@ -90,10 +81,20 @@ describe('AuthController', () => {
     );
 
     expect(result.verificationRequired).toBe(false);
-    expect(reply.setCookie).toHaveBeenCalled();
+    expect(reply.setCookie).toHaveBeenCalledTimes(2);
+    expect(reply.setCookie).toHaveBeenCalledWith(
+      'access_token',
+      'access-token',
+      expect.any(Object),
+    );
+    expect(reply.setCookie).toHaveBeenCalledWith(
+      'refresh_token',
+      'refresh-token',
+      expect.any(Object),
+    );
   });
 
-  it('does not set a cookie when login requires verification', async () => {
+  it('does not set cookies when login requires verification', async () => {
     authService.login.mockResolvedValue({
       response: { message: 'Enter the code.', verificationRequired: true },
     });
@@ -109,10 +110,10 @@ describe('AuthController', () => {
     expect(reply.setCookie).not.toHaveBeenCalled();
   });
 
-  it('delegates verifyLogin to AuthService and sets the cookie on success', async () => {
+  it('delegates verifyLogin to AuthService and sets cookies on success', async () => {
     authService.verifyLogin.mockResolvedValue({
       response: { message: 'Signed in.', verificationRequired: false },
-      session: { token: 'raw-token', session: { expiresAt: new Date() } },
+      tokens: { accessToken: 'access-token', refreshToken: 'refresh-token' },
     });
     const reply = makeReply();
 
@@ -123,13 +124,13 @@ describe('AuthController', () => {
     );
 
     expect(authService.verifyLogin).toHaveBeenCalled();
-    expect(reply.setCookie).toHaveBeenCalled();
+    expect(reply.setCookie).toHaveBeenCalledTimes(2);
   });
 
   it('delegates verifyLoginByLink to AuthService', async () => {
     authService.verifyLoginByLink.mockResolvedValue({
       response: { message: 'Signed in.', verificationRequired: false },
-      session: { token: 'raw-token', session: { expiresAt: new Date() } },
+      tokens: { accessToken: 'access-token', refreshToken: 'refresh-token' },
     });
     const reply = makeReply();
 
@@ -141,17 +142,43 @@ describe('AuthController', () => {
     );
   });
 
-  it('clears the cookie on logout', async () => {
-    authService.logout.mockResolvedValue({ message: 'Signed out.' });
+  it('delegates refresh to AuthService and sets both cookies', async () => {
+    authService.refresh.mockResolvedValue({
+      accessToken: 'new-access-token',
+      refreshToken: 'new-refresh-token',
+    });
     const reply = makeReply();
 
-    const result = await controller.logout(
-      { ip: '127.0.0.1', headers: {}, cookies: { session: 'raw-token' } },
+    const result = await controller.refresh(
+      { ip: '127.0.0.1', headers: {}, cookies: { refresh_token: 'raw-rt' } },
       reply as never,
     );
 
+    expect(result).toEqual({ message: 'Session refreshed.' });
+    expect(authService.refresh).toHaveBeenCalledWith(
+      'raw-rt',
+      expect.any(Object),
+    );
+    expect(reply.setCookie).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears both cookies on logout without requiring auth', () => {
+    authService.logout.mockReturnValue({ message: 'Signed out.' });
+    const reply = makeReply();
+
+    const result = controller.logout(reply as never);
+
     expect(result.message).toBe('Signed out.');
-    expect(reply.clearCookie).toHaveBeenCalled();
+    expect(authService.logout).toHaveBeenCalledWith();
+    expect(reply.clearCookie).toHaveBeenCalledTimes(2);
+    expect(reply.clearCookie).toHaveBeenCalledWith(
+      'access_token',
+      expect.any(Object),
+    );
+    expect(reply.clearCookie).toHaveBeenCalledWith(
+      'refresh_token',
+      expect.any(Object),
+    );
   });
 
   it('delegates password-reset request to PasswordResetService', async () => {

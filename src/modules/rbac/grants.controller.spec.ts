@@ -2,8 +2,10 @@ import { Reflector } from '@nestjs/core';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 
-import { SessionAuthGuard } from '@/modules/auth/guards/session-auth.guard';
-import { SessionService } from '@/modules/auth/session.service';
+import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
+import { TokenService } from '@/modules/auth/token.service';
+import { LoginAuditService } from '@/modules/auth/login-audit.service';
+import { User } from '@/modules/users/entities/user.entity';
 import { UserRole } from './entities/user-role.entity';
 
 import { AccessConfigService } from './access-config.service';
@@ -33,8 +35,13 @@ describe('GrantsController', () => {
       controllers: [GrantsController],
       providers: [
         { provide: GrantsService, useValue: grantsService },
-        SessionAuthGuard,
-        { provide: SessionService, useValue: { validate: jest.fn() } },
+        JwtAuthGuard,
+        { provide: TokenService, useValue: { verifyAccessToken: jest.fn() } },
+        { provide: LoginAuditService, useValue: { record: jest.fn() } },
+        {
+          provide: getRepositoryToken(User),
+          useValue: { findOne: jest.fn() },
+        },
         {
           provide: getRepositoryToken(UserRole),
           useValue: { find: jest.fn() },
