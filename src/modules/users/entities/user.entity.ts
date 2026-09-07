@@ -54,4 +54,7 @@ export class User {
 
   @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
   lockedUntil!: Date | null;
+
+  @Column({ name: 'photo_url', type: 'varchar', nullable: true })
+  photoUrl!: string | null;
 }

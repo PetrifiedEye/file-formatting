@@ -1,12 +1,22 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { isUUID } from 'class-validator';
 import { LessThan, Repository } from 'typeorm';
 
+import { UserProfileResponseDto } from './dto/user-profile-response.dto';
+import { UserProfileAuditOutcome } from './entities/user-profile-audit-event.entity';
 import { User, UserStatus } from './entities/user.entity';
+import { UsersAuditService } from './users-audit.service';
+import type { RequestUser } from '@/modules/auth/guards/jwt-auth.guard';
 import {
   LOCKOUT_DURATION_MS,
   LOCKOUT_THRESHOLD,
 } from '@/modules/auth/utils/lockout.constants';
+import { AccessConfigService } from '@/modules/rbac/access-config.service';
 
 export interface CreateUserInput {
   email: string;
@@ -21,7 +31,91 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    private readonly accessConfigService: AccessConfigService,
+    private readonly usersAuditService: UsersAuditService,
   ) {}
+
+  async getProfileFor(
+    viewer: RequestUser,
+    targetId: string,
+  ): Promise<UserProfileResponseDto> {
+    if (targetId === viewer.id) {
+      const user = await this.usersRepository.findOne({
+        where: { id: viewer.id },
+      });
+
+      if (!user) {
+        await this.recordAudit(
+          viewer.id,
+          targetId,
+          UserProfileAuditOutcome.NOT_FOUND,
+        );
+        throw new NotFoundException('User not found');
+      }
+
+      await this.recordAudit(
+        viewer.id,
+        targetId,
+        UserProfileAuditOutcome.SELF_VIEW,
+      );
+
+      return {
+        id: user.id,
+        photo: user.photoUrl,
+        email: user.email,
+        status: user.status,
+        createdAt: user.createdAt,
+      };
+    }
+
+    const hasAccess = this.accessConfigService.hasPermission(
+      viewer.roles,
+      'users',
+      'read',
+    );
+
+    if (!hasAccess) {
+      await this.recordAudit(
+        viewer.id,
+        targetId,
+        UserProfileAuditOutcome.DENIED,
+      );
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    const target = isUUID(targetId)
+      ? await this.usersRepository.findOne({ where: { id: targetId } })
+      : null;
+
+    if (!target) {
+      await this.recordAudit(
+        viewer.id,
+        targetId,
+        UserProfileAuditOutcome.NOT_FOUND,
+      );
+      throw new NotFoundException('User not found');
+    }
+
+    await this.recordAudit(
+      viewer.id,
+      targetId,
+      UserProfileAuditOutcome.PRIVILEGED_VIEW,
+    );
+
+    return { id: target.id, photo: target.photoUrl };
+  }
+
+  private async recordAudit(
+    viewerId: string,
+    targetId: string,
+    outcome: UserProfileAuditOutcome,
+  ): Promise<void> {
+    try {
+      await this.usersAuditService.record(viewerId, targetId, outcome);
+    } catch {
+      // Audit failures are best-effort (FR-010) and must never affect the response.
+    }
+  }
 
   async findByNormalizedEmail(email: string): Promise<User | null> {
     return this.usersRepository.findOne({ where: { email } });

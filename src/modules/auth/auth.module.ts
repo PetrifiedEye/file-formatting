@@ -32,7 +32,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
       LoginAuditEvent,
       UserRole,
     ]),
-    UsersModule,
+    forwardRef(() => UsersModule),
     forwardRef(() => SettingsModule),
     EmailModule,
     JwtModule.register({}),
@@ -49,6 +49,11 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     PasswordResetService,
     JwtAuthGuard,
   ],
-  exports: [JwtAuthGuard, TokenService, LoginAuditService, UsersModule],
+  exports: [
+    JwtAuthGuard,
+    TokenService,
+    LoginAuditService,
+    forwardRef(() => UsersModule),
+  ],
 })
 export class AuthModule {}
