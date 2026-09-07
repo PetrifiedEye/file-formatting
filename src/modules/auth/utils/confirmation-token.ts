@@ -28,3 +28,4 @@ export const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 export const RESEND_INTERVAL_MS = 60 * 1000;
 export const EMAIL_CAP_WINDOW_MS = 10 * 60 * 1000;
 export const EMAIL_CAP_MAX = 5;
+export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;

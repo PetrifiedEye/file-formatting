@@ -44,4 +44,14 @@ export class User {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
+
+  @Column({
+    name: 'failed_login_attempts',
+    type: 'smallint',
+    default: 0,
+  })
+  failedLoginAttempts!: number;
+
+  @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
+  lockedUntil!: Date | null;
 }

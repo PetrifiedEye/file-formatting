@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Transactional } from 'typeorm-transactional';
 
@@ -19,6 +21,16 @@ import {
   RegistrationAuditOutcome,
 } from './entities/registration-audit-event.entity';
 import { RegistrationAuditService } from './registration-audit.service';
+import {
+  LoginAuditEventType,
+  LoginAuditOutcome,
+} from './entities/login-audit-event.entity';
+import { LoginAuditService } from './login-audit.service';
+import { SessionService, IssuedSession } from './session.service';
+import {
+  LoginChallengeService,
+  LoginChallengeVerifyFailure,
+} from './login-challenge.service';
 import { normalizeEmail } from './utils/email-normalizer';
 import {
   EMAIL_CAP_MAX,
@@ -28,13 +40,16 @@ import {
   PENDING_TTL_MS,
   RESEND_INTERVAL_MS,
 } from './utils/confirmation-token';
-import { hashPassword } from './utils/password-hasher';
+import { hashPassword, verifyPassword } from './utils/password-hasher';
 import { RegisterRequestDto } from './dto/register-request.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
 import { ConfirmCodeRequestDto } from './dto/confirm-code-request.dto';
 import { ConfirmSuccessResponseDto } from './dto/confirm-success-response.dto';
 import { ResendRequestDto } from './dto/resend-request.dto';
 import { ResendResponseDto } from './dto/resend-response.dto';
+import { LoginRequestDto } from './dto/login-request.dto';
+import { LoginResponseDto } from './dto/login-response.dto';
+import { LoginVerifyRequestDto } from './dto/login-verify-request.dto';
 
 export interface RequestMeta {
   ipAddress?: string | null;
@@ -52,6 +67,23 @@ const CONFIRM_SUCCESS_MESSAGE =
 const GENERIC_CONFIRM_FAILURE =
   'Unable to confirm registration. Please check your code or request a new one.';
 const GENERIC_NOT_FOUND = 'No pending registration found for this email.';
+const LOGIN_SUCCESS_MESSAGE = 'Signed in.';
+const GENERIC_LOGIN_FAILURE = 'Invalid email or password.';
+const PENDING_CONFIRMATION_MESSAGE =
+  'Please confirm your email before signing in.';
+const LOGOUT_MESSAGE = 'Signed out.';
+const VERIFICATION_REQUIRED_MESSAGE =
+  'Enter the code sent to your email to finish signing in.';
+const GENERIC_LOGIN_VERIFY_FAILURE =
+  'Unable to verify sign-in. Please check your code or start over.';
+const GENERIC_LOGIN_VERIFY_NOT_FOUND =
+  'No pending sign-in verification found for this email.';
+const LOCKOUT_MESSAGE = 'Too many failed attempts. Try again later.';
+
+export interface LoginResult {
+  response: LoginResponseDto;
+  session?: IssuedSession;
+}
 
 @Injectable()
 export class AuthService {
@@ -61,7 +93,260 @@ export class AuthService {
     private readonly auditService: RegistrationAuditService,
     private readonly challengeService: ConfirmationChallengeService,
     private readonly confirmationMailService: ConfirmationMailService,
+    private readonly loginAuditService: LoginAuditService,
+    private readonly sessionService: SessionService,
+    private readonly loginChallengeService: LoginChallengeService,
   ) {}
+
+  async login(dto: LoginRequestDto, meta: RequestMeta): Promise<LoginResult> {
+    const normalizedEmail = normalizeEmail(dto.email);
+    const user = await this.usersService.findByNormalizedEmail(normalizedEmail);
+
+    if (user && this.usersService.isLockedOut(user)) {
+      await this.loginAuditService.record(
+        LoginAuditEventType.LOGIN_ATTEMPT,
+        LoginAuditOutcome.LOCKED_OUT,
+        {
+          normalizedEmail,
+          userId: user.id,
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+          failureReason: 'locked_out',
+        },
+      );
+      throw new HttpException({ message: LOCKOUT_MESSAGE }, HttpStatus.LOCKED);
+    }
+
+    const passwordValid = user
+      ? await verifyPassword(dto.password, user.passwordHash)
+      : false;
+
+    if (!user || !passwordValid) {
+      if (user) {
+        await this.usersService.recordFailedLogin(user);
+      }
+
+      await this.loginAuditService.record(
+        LoginAuditEventType.LOGIN_ATTEMPT,
+        LoginAuditOutcome.FAILURE,
+        {
+          normalizedEmail,
+          userId: user?.id,
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+          failureReason: 'invalid_credentials',
+        },
+      );
+      throw new UnauthorizedException(GENERIC_LOGIN_FAILURE);
+    }
+
+    if (user.status === UserStatus.PENDING_CONFIRMATION) {
+      await this.loginAuditService.record(
+        LoginAuditEventType.LOGIN_ATTEMPT,
+        LoginAuditOutcome.FAILURE,
+        {
+          normalizedEmail,
+          userId: user.id,
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+          failureReason: 'email_not_confirmed',
+        },
+      );
+      throw new ForbiddenException({
+        message: PENDING_CONFIRMATION_MESSAGE,
+        canResend: true,
+      });
+    }
+
+    await this.usersService.recordSuccessfulLogin(user);
+
+    await this.loginAuditService.record(
+      LoginAuditEventType.LOGIN_ATTEMPT,
+      LoginAuditOutcome.SUCCESS,
+      {
+        normalizedEmail,
+        userId: user.id,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+      },
+    );
+
+    const settings = await this.settingsService.getSettings();
+
+    if (settings.signInConfirmationEnabled) {
+      const { tokens } = await this.loginChallengeService.issue(user.id);
+      await this.confirmationMailService.sendLoginVerificationEmail(
+        normalizedEmail,
+        tokens.otp,
+        tokens.linkToken,
+      );
+
+      return {
+        response: {
+          message: VERIFICATION_REQUIRED_MESSAGE,
+          verificationRequired: true,
+        },
+      };
+    }
+
+    const session = await this.sessionService.issue(
+      user,
+      meta.ipAddress,
+      meta.userAgent,
+    );
+
+    return {
+      response: {
+        message: LOGIN_SUCCESS_MESSAGE,
+        verificationRequired: false,
+      },
+      session,
+    };
+  }
+
+  @Transactional()
+  async verifyLogin(
+    dto: LoginVerifyRequestDto,
+    meta: RequestMeta = {},
+  ): Promise<LoginResult> {
+    const normalizedEmail = normalizeEmail(dto.email);
+    const user = await this.usersService.findByNormalizedEmail(normalizedEmail);
+
+    if (!user) {
+      await this.recordLoginVerifyFailure(
+        normalizedEmail,
+        undefined,
+        'no_pending_verification',
+      );
+      throw new NotFoundException(GENERIC_LOGIN_VERIFY_NOT_FOUND);
+    }
+
+    const result = await this.loginChallengeService.verifyByCode(
+      user.id,
+      dto.code,
+    );
+
+    if (!result.ok && result.reason === LoginChallengeVerifyFailure.NOT_FOUND) {
+      await this.recordLoginVerifyFailure(
+        normalizedEmail,
+        user.id,
+        result.reason,
+      );
+      throw new NotFoundException(GENERIC_LOGIN_VERIFY_NOT_FOUND);
+    }
+
+    return this.finalizeLoginVerification(result, normalizedEmail, user, meta);
+  }
+
+  @Transactional()
+  async verifyLoginByLink(
+    token: string,
+    meta: RequestMeta = {},
+  ): Promise<LoginResult> {
+    const result = await this.loginChallengeService.verifyByLinkToken(token);
+
+    if (!result.ok) {
+      await this.recordLoginVerifyFailure('unknown', undefined, result.reason);
+      throw new BadRequestException(GENERIC_LOGIN_VERIFY_FAILURE);
+    }
+
+    const user = await this.usersService.findById(result.challenge.userId);
+    if (!user) {
+      throw new BadRequestException(GENERIC_LOGIN_VERIFY_FAILURE);
+    }
+
+    return this.finalizeLoginVerification(result, user.email, user, meta);
+  }
+
+  private async finalizeLoginVerification(
+    result:
+      | { ok: true; challenge: { userId: string } }
+      | {
+          ok: false;
+          reason: LoginChallengeVerifyFailure;
+        },
+    normalizedEmail: string,
+    user: User,
+    meta: RequestMeta,
+  ): Promise<LoginResult> {
+    if (!result.ok) {
+      await this.recordLoginVerifyFailure(
+        normalizedEmail,
+        user.id,
+        result.reason,
+      );
+      throw new BadRequestException(GENERIC_LOGIN_VERIFY_FAILURE);
+    }
+
+    const session = await this.sessionService.issue(
+      user,
+      meta.ipAddress,
+      meta.userAgent,
+    );
+
+    await this.loginAuditService.record(
+      LoginAuditEventType.LOGIN_VERIFICATION_ATTEMPT,
+      LoginAuditOutcome.SUCCESS,
+      {
+        normalizedEmail,
+        userId: user.id,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+      },
+    );
+
+    return {
+      response: {
+        message: LOGIN_SUCCESS_MESSAGE,
+        verificationRequired: false,
+      },
+      session,
+    };
+  }
+
+  private async recordLoginVerifyFailure(
+    normalizedEmail: string,
+    userId: string | undefined,
+    failureReason: string,
+  ): Promise<void> {
+    await this.loginAuditService.record(
+      LoginAuditEventType.LOGIN_VERIFICATION_ATTEMPT,
+      LoginAuditOutcome.FAILURE,
+      {
+        normalizedEmail,
+        userId,
+        failureReason,
+      },
+    );
+  }
+
+  async logout(
+    rawToken: string | undefined,
+    meta: RequestMeta,
+  ): Promise<{ message: string }> {
+    if (rawToken) {
+      const session = await this.sessionService.validate(rawToken);
+
+      if (session) {
+        await this.sessionService.invalidate(session.id);
+
+        const user = await this.usersService.findById(session.userId);
+
+        await this.loginAuditService.record(
+          LoginAuditEventType.LOGOUT,
+          LoginAuditOutcome.SUCCESS,
+          {
+            normalizedEmail: user?.email ?? '',
+            userId: session.userId,
+            ipAddress: meta.ipAddress,
+            userAgent: meta.userAgent,
+          },
+        );
+      }
+    }
+
+    return { message: LOGOUT_MESSAGE };
+  }
 
   async register(
     dto: RegisterRequestDto,

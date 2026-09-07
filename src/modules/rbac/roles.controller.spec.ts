@@ -1,5 +1,10 @@
 import { Reflector } from '@nestjs/core';
 import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+
+import { SessionAuthGuard } from '@/modules/auth/guards/session-auth.guard';
+import { SessionService } from '@/modules/auth/session.service';
+import { UserRole } from './entities/user-role.entity';
 
 import { AccessConfigService } from './access-config.service';
 import {
@@ -28,6 +33,12 @@ describe('RolesController', () => {
       controllers: [RolesController],
       providers: [
         { provide: RolesService, useValue: rolesService },
+        SessionAuthGuard,
+        { provide: SessionService, useValue: { validate: jest.fn() } },
+        {
+          provide: getRepositoryToken(UserRole),
+          useValue: { find: jest.fn() },
+        },
         PermissionGuard,
         Reflector,
         { provide: AccessConfigService, useValue: {} },
