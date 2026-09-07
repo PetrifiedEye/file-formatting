@@ -67,4 +67,63 @@ describe('UsersService', () => {
     expect(result.confirmedAt).toBeInstanceOf(Date);
     expect(result.pendingExpiresAt).toBeNull();
   });
+
+  describe('lockout helpers', () => {
+    it('increments failed_login_attempts without locking below threshold', async () => {
+      const user = {
+        id: '1',
+        failedLoginAttempts: 2,
+        lockedUntil: null,
+      } as User;
+
+      const result = await service.recordFailedLogin(user);
+
+      expect(result.failedLoginAttempts).toBe(3);
+      expect(result.lockedUntil).toBeNull();
+    });
+
+    it('locks the account once the threshold is reached', async () => {
+      const user = {
+        id: '1',
+        failedLoginAttempts: 4,
+        lockedUntil: null,
+      } as User;
+
+      const now = new Date('2026-01-01T00:00:00.000Z');
+      const result = await service.recordFailedLogin(user, now);
+
+      expect(result.failedLoginAttempts).toBe(5);
+      expect(result.lockedUntil).toEqual(
+        new Date(now.getTime() + 15 * 60 * 1000),
+      );
+    });
+
+    it('resets attempts and lock on success', async () => {
+      const user = {
+        id: '1',
+        failedLoginAttempts: 5,
+        lockedUntil: new Date(),
+      } as User;
+
+      const result = await service.recordSuccessfulLogin(user);
+
+      expect(result.failedLoginAttempts).toBe(0);
+      expect(result.lockedUntil).toBeNull();
+    });
+
+    it('reports lockout state via isLockedOut', () => {
+      const now = new Date('2026-01-01T00:00:00.000Z');
+      const lockedUser = {
+        lockedUntil: new Date(now.getTime() + 1000),
+      } as User;
+      const unlockedUser = { lockedUntil: null } as User;
+      const expiredUser = {
+        lockedUntil: new Date(now.getTime() - 1000),
+      } as User;
+
+      expect(service.isLockedOut(lockedUser, now)).toBe(true);
+      expect(service.isLockedOut(unlockedUser, now)).toBe(false);
+      expect(service.isLockedOut(expiredUser, now)).toBe(false);
+    });
+  });
 });

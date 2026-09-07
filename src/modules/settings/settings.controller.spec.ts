@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 
+import { AdminGuard } from './guards/admin.guard';
 import { SettingsController } from './settings.controller';
 import { SettingsService } from './settings.service';
 
@@ -10,13 +11,18 @@ describe('SettingsController', () => {
     updateConfirmationPolicy: jest.fn(),
   };
 
+  const adminGuard = { canActivate: jest.fn().mockReturnValue(true) };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [SettingsController],
       providers: [{ provide: SettingsService, useValue: settingsService }],
-    }).compile();
+    })
+      .overrideGuard(AdminGuard)
+      .useValue(adminGuard)
+      .compile();
 
     controller = module.get(SettingsController);
   });

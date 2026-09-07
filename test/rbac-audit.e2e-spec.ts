@@ -5,6 +5,7 @@ import {
 } from '@nestjs/platform-fastify';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import fastifyCookie from '@fastify/cookie';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
@@ -12,8 +13,10 @@ import {
   initializeTransactionalContext,
   StorageDriver,
 } from 'typeorm-transactional';
+import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 
 import { AppModule } from '../src/core/app/app.module';
+import { ConfigService } from '../src/core/config/config.service';
 import { AccessConfigService } from '../src/modules/rbac/access-config.service';
 import { Grant } from '../src/modules/rbac/entities/grant.entity';
 import { Permission } from '../src/modules/rbac/entities/permission.entity';
@@ -24,8 +27,20 @@ import {
 } from '../src/modules/rbac/entities/rbac-audit-event.entity';
 import { Role } from '../src/modules/rbac/entities/role.entity';
 import { UserRole } from '../src/modules/rbac/entities/user-role.entity';
-import { User } from '../src/modules/users/entities/user.entity';
-import { attachRbacTestAuth } from './support/rbac-test-auth.module';
+import { User, UserStatus } from '../src/modules/users/entities/user.entity';
+import { hashPassword } from '../src/modules/auth/utils/password-hasher';
+
+const TEST_PASSWORD = 'CorrectHorse123!';
+
+function extractSessionCookie(setCookieHeader: string[] | undefined): string {
+  const cookie = (setCookieHeader ?? []).find((value) =>
+    value.startsWith('session='),
+  );
+  if (!cookie) {
+    throw new Error('No session cookie found in response');
+  }
+  return cookie.split(';')[0];
+}
 
 describe('RBAC Audit Trail (e2e)', () => {
   let app: INestApplication<App>;
@@ -37,9 +52,12 @@ describe('RBAC Audit Trail (e2e)', () => {
   let auditRepository: Repository<RbacAuditEvent>;
 
   let accessConfigService: AccessConfigService;
+  let throttlerStorage: ThrottlerStorageService;
 
   let adminUserId: string;
   let nonAdminUserId: string;
+  let adminCookie: string;
+  let nonAdminCookie: string;
 
   beforeAll(async () => {
     initializeTransactionalContext({ storageDriver: StorageDriver.AUTO });
@@ -53,7 +71,15 @@ describe('RBAC Audit Trail (e2e)', () => {
     );
 
     app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-    attachRbacTestAuth(app, moduleFixture);
+
+    const configService = moduleFixture.get(ConfigService);
+    await app
+      .getHttpAdapter()
+      .getInstance()
+      .register(fastifyCookie, {
+        secret: configService.get('COOKIE_SECRET'),
+      });
+
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
 
@@ -64,13 +90,23 @@ describe('RBAC Audit Trail (e2e)', () => {
     userRepository = moduleFixture.get(getRepositoryToken(User));
     auditRepository = moduleFixture.get(getRepositoryToken(RbacAuditEvent));
     accessConfigService = moduleFixture.get(AccessConfigService);
+    throttlerStorage = moduleFixture.get<ThrottlerStorage>(
+      ThrottlerStorage,
+    ) as ThrottlerStorageService;
   });
 
   afterAll(async () => {
     await app.close();
   });
 
+  function clearThrottler() {
+    throttlerStorage.onApplicationShutdown();
+    throttlerStorage.storage.clear();
+  }
+
   beforeEach(async () => {
+    clearThrottler();
+
     await auditRepository.createQueryBuilder().delete().execute();
     await userRoleRepository.createQueryBuilder().delete().execute();
     await grantRepository.createQueryBuilder().delete().execute();
@@ -78,10 +114,14 @@ describe('RBAC Audit Trail (e2e)', () => {
     await roleRepository.createQueryBuilder().delete().execute();
     await userRepository.createQueryBuilder().delete().execute();
 
+    const passwordHash = await hashPassword(TEST_PASSWORD);
+
     const adminUser = await userRepository.save(
       userRepository.create({
         email: `rbac-audit-admin-${Date.now()}-${Math.random()}@example.com`,
-        passwordHash: 'not-a-real-hash',
+        passwordHash,
+        status: UserStatus.ACTIVE,
+        confirmedAt: new Date(),
       }),
     );
     adminUserId = adminUser.id;
@@ -89,7 +129,9 @@ describe('RBAC Audit Trail (e2e)', () => {
     const nonAdminUser = await userRepository.save(
       userRepository.create({
         email: `rbac-audit-nonadmin-${Date.now()}-${Math.random()}@example.com`,
-        passwordHash: 'not-a-real-hash',
+        passwordHash,
+        status: UserStatus.ACTIVE,
+        confirmedAt: new Date(),
       }),
     );
     nonAdminUserId = nonAdminUser.id;
@@ -115,32 +157,48 @@ describe('RBAC Audit Trail (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    // reset the audit log after seed writes above so each test starts clean
+    const adminLogin = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: adminUser.email, password: TEST_PASSWORD })
+      .expect(200);
+    adminCookie = extractSessionCookie(
+      adminLogin.headers['set-cookie'] as unknown as string[],
+    );
+
+    const nonAdminLogin = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: nonAdminUser.email, password: TEST_PASSWORD })
+      .expect(200);
+    nonAdminCookie = extractSessionCookie(
+      nonAdminLogin.headers['set-cookie'] as unknown as string[],
+    );
+
+    // reset the audit log after seed writes and logins above so each test starts clean
     await auditRepository.createQueryBuilder().delete().execute();
   });
 
   it('logs create/update/delete across roles, permissions, and grants, plus reloads', async () => {
     const roleCreate = await request(app.getHttpServer())
       .post('/rbac/roles')
-      .set('x-test-user-id', adminUserId)
+      .set('Cookie', adminCookie)
       .send({ name: `audit-role-${Date.now()}` })
       .expect(201);
 
     await request(app.getHttpServer())
       .patch(`/rbac/roles/${roleCreate.body.id}`)
-      .set('x-test-user-id', adminUserId)
+      .set('Cookie', adminCookie)
       .send({ description: 'updated' })
       .expect(200);
 
     const permissionCreate = await request(app.getHttpServer())
       .post('/rbac/permissions')
-      .set('x-test-user-id', adminUserId)
+      .set('Cookie', adminCookie)
       .send({ name: `audit-perm-${Date.now()}`, actions: ['read'] })
       .expect(201);
 
     const grantCreate = await request(app.getHttpServer())
       .post('/rbac/grants')
-      .set('x-test-user-id', adminUserId)
+      .set('Cookie', adminCookie)
       .send({
         roleId: roleCreate.body.id,
         permissionId: permissionCreate.body.id,
@@ -149,7 +207,7 @@ describe('RBAC Audit Trail (e2e)', () => {
 
     await request(app.getHttpServer())
       .delete(`/rbac/grants/${grantCreate.body.id}`)
-      .set('x-test-user-id', adminUserId)
+      .set('Cookie', adminCookie)
       .expect(204);
 
     const events = await auditRepository.find({
@@ -186,7 +244,7 @@ describe('RBAC Audit Trail (e2e)', () => {
   it('logs management_access_denied for a non-admin management attempt', async () => {
     await request(app.getHttpServer())
       .post('/rbac/roles')
-      .set('x-test-user-id', nonAdminUserId)
+      .set('Cookie', nonAdminCookie)
       .send({ name: `denied-${Date.now()}` })
       .expect(403);
 
