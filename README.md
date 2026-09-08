@@ -50,6 +50,15 @@ npm run migration:show       # List applied / pending
 
 CLI uses `src/database/data-source.ts`. At runtime, Nest uses the DataSource from `DatabaseModule`. If `POSTGRES_MIGRATIONS_RUN=true`, pending migrations also run on app start.
 
+### E2E test database
+
+E2E tests run against a separate, isolated database (not your dev database), so `npm run test:e2e` never touches or destroys dev data:
+
+1. Copy the template once: `cp .env.test.example .env.test`, then adjust any values that differ from your dev `.env` (at minimum they must point at different `POSTGRES_DB` values — the template defaults to `app_test`).
+2. That's it — no manual `createdb` step needed. Running `npm run test:e2e` automatically runs `pretest:e2e` first, which creates the test database if it doesn't exist yet, and migrations run on app boot via `POSTGRES_MIGRATIONS_RUN=true`.
+3. If `.env.test` is missing, or its `POSTGRES_DB` matches dev's, the suite fails fast with a clear error instead of silently running against (and mutating) the dev database.
+4. **CI:** no `.env.test` file is needed — set `POSTGRES_HOST`, `POSTGRES_DB`, etc. as real environment variables and they take precedence over anything a file would provide.
+
 ## Libraries
 
 | Purpose       | Library                  |
