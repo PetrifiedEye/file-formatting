@@ -5,8 +5,11 @@ import {
 } from '@nestjs/platform-fastify';
 import compression from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { resolve } from 'path';
 import {
   initializeTransactionalContext,
   StorageDriver,
@@ -61,6 +64,18 @@ async function bootstrap() {
 
   await app.register(fastifyCookie, {
     secret: configService.get('COOKIE_SECRET'),
+  });
+
+  await app.register(fastifyMultipart, {
+    limits: {
+      fileSize: Number(configService.get('PHOTO_MAX_SIZE_BYTES')),
+      files: 1,
+    },
+  });
+
+  await app.register(fastifyStatic, {
+    root: resolve(configService.get('ASSETS_DIR')),
+    prefix: '/assets/',
   });
 
   const nodeEnv = configService.get('NODE_ENV');

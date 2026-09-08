@@ -1,7 +1,14 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 
+import { ConfigService } from '@/core/config/config.service';
+import { LocalFileStorageService } from '@/core/storage/local-file-storage.service';
 import type { RequestUser } from '@/modules/auth/guards/jwt-auth.guard';
 import { AccessConfigService } from '@/modules/rbac/access-config.service';
 
@@ -21,6 +28,8 @@ describe('UsersService', () => {
   };
   let accessConfigService: { hasPermission: jest.Mock };
   let usersAuditService: { record: jest.Mock };
+  let storageService: { save: jest.Mock; delete: jest.Mock };
+  let configService: { get: jest.Mock };
 
   beforeEach(async () => {
     repository = {
@@ -34,6 +43,13 @@ describe('UsersService', () => {
     };
     accessConfigService = { hasPermission: jest.fn() };
     usersAuditService = { record: jest.fn().mockResolvedValue(undefined) };
+    storageService = {
+      save: jest.fn().mockResolvedValue('photos/new-uuid.jpg'),
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    configService = {
+      get: jest.fn().mockReturnValue('http://localhost:3007'),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -41,6 +57,8 @@ describe('UsersService', () => {
         { provide: getRepositoryToken(User), useValue: repository },
         { provide: AccessConfigService, useValue: accessConfigService },
         { provide: UsersAuditService, useValue: usersAuditService },
+        { provide: LocalFileStorageService, useValue: storageService },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -263,6 +281,94 @@ describe('UsersService', () => {
       const result = await service.getProfileFor(viewer(), viewerId);
 
       expect(result.id).toBe(viewerId);
+    });
+  });
+
+  describe('updatePhoto', () => {
+    const jpegBuffer = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+
+    it('stores the file, updates photoUrl, and deletes the previous photo', async () => {
+      const user = {
+        id: 'user-1',
+        photoUrl: 'http://localhost:3007/assets/photos/old-uuid.png',
+      } as User;
+      repository.findOne.mockResolvedValue(user);
+
+      const result = await service.updatePhoto('user-1', jpegBuffer);
+
+      expect(storageService.save).toHaveBeenCalledWith(jpegBuffer, 'jpg');
+      expect(result.photoUrl).toBe(
+        'http://localhost:3007/assets/photos/new-uuid.jpg',
+      );
+      expect(repository.save).toHaveBeenCalled();
+      expect(storageService.delete).toHaveBeenCalledWith('photos/old-uuid.png');
+    });
+
+    it('does not attempt to delete when there was no previous photo', async () => {
+      repository.findOne.mockResolvedValue({
+        id: 'user-1',
+        photoUrl: null,
+      } as User);
+
+      await service.updatePhoto('user-1', jpegBuffer);
+
+      expect(storageService.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the target user does not exist', async () => {
+      repository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updatePhoto('missing', jpegBuffer),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(storageService.save).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException for a file with no recognizable image signature', async () => {
+      repository.findOne.mockResolvedValue({ id: 'user-1' } as User);
+
+      await expect(
+        service.updatePhoto('user-1', Buffer.from('not an image')),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(storageService.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateEmailDirect', () => {
+    it('updates the email immediately', async () => {
+      const user = { id: 'user-1', email: 'old@example.com' } as User;
+      repository.findOne
+        .mockResolvedValueOnce(user)
+        .mockResolvedValueOnce(null);
+
+      const result = await service.updateEmailDirect(
+        'user-1',
+        'new@example.com',
+      );
+
+      expect(result.email).toBe('new@example.com');
+      expect(repository.save).toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the target user does not exist', async () => {
+      repository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updateEmailDirect('missing', 'new@example.com'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws ConflictException when the email is already used by another account', async () => {
+      const user = { id: 'user-1', email: 'old@example.com' } as User;
+      const other = { id: 'user-2', email: 'new@example.com' } as User;
+      repository.findOne
+        .mockResolvedValueOnce(user)
+        .mockResolvedValueOnce(other);
+
+      await expect(
+        service.updateEmailDirect('user-1', 'new@example.com'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repository.save).not.toHaveBeenCalled();
     });
   });
 });

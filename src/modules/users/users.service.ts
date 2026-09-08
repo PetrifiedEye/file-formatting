@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -7,10 +9,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { isUUID } from 'class-validator';
 import { LessThan, Repository } from 'typeorm';
 
+import { ConfigService } from '@/core/config/config.service';
+import { LocalFileStorageService } from '@/core/storage/local-file-storage.service';
+
 import { UserProfileResponseDto } from './dto/user-profile-response.dto';
 import { UserProfileAuditOutcome } from './entities/user-profile-audit-event.entity';
 import { User, UserStatus } from './entities/user.entity';
 import { UsersAuditService } from './users-audit.service';
+import { detectImageExtension } from './utils/image-type';
 import type { RequestUser } from '@/modules/auth/guards/jwt-auth.guard';
 import {
   LOCKOUT_DURATION_MS,
@@ -33,7 +39,65 @@ export class UsersService {
     private readonly usersRepository: Repository<User>,
     private readonly accessConfigService: AccessConfigService,
     private readonly usersAuditService: UsersAuditService,
+    private readonly storageService: LocalFileStorageService,
+    private readonly configService: ConfigService,
   ) {}
+
+  async updatePhoto(targetId: string, fileBuffer: Buffer): Promise<User> {
+    const user = await this.usersRepository.findOne({
+      where: { id: targetId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const ext = detectImageExtension(fileBuffer);
+    if (!ext) {
+      throw new BadRequestException('Unsupported or invalid image file');
+    }
+
+    const relativePath = await this.storageService.save(fileBuffer, ext);
+    const previousRelativePath = this.toRelativeAssetPath(user.photoUrl);
+
+    user.photoUrl = `${this.configService.get('ASSETS_BASE_URL')}/assets/${relativePath}`;
+    await this.usersRepository.save(user);
+
+    if (previousRelativePath) {
+      await this.storageService.delete(previousRelativePath);
+    }
+
+    return user;
+  }
+
+  async updateEmailDirect(targetId: string, newEmail: string): Promise<User> {
+    const user = await this.usersRepository.findOne({
+      where: { id: targetId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const existing = await this.usersRepository.findOne({
+      where: { email: newEmail },
+    });
+    if (existing && existing.id !== user.id) {
+      throw new ConflictException('Email already in use');
+    }
+
+    user.email = newEmail;
+    return this.usersRepository.save(user);
+  }
+
+  private toRelativeAssetPath(photoUrl: string | null): string | null {
+    if (!photoUrl) {
+      return null;
+    }
+
+    const prefix = `${this.configService.get('ASSETS_BASE_URL')}/assets/`;
+    return photoUrl.startsWith(prefix) ? photoUrl.slice(prefix.length) : null;
+  }
 
   async getProfileFor(
     viewer: RequestUser,
