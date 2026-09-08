@@ -4,6 +4,7 @@ import { ConfigService } from '@/core/config/config.service';
 
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PasswordResetService } from './password-reset.service';
 
 describe('AuthController', () => {
@@ -40,7 +41,10 @@ describe('AuthController', () => {
         { provide: PasswordResetService, useValue: passwordResetService },
         { provide: ConfigService, useValue: configService },
       ],
-    }).compile();
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: jest.fn().mockReturnValue(true) })
+      .compile();
 
     controller = module.get(AuthController);
   });
@@ -179,6 +183,15 @@ describe('AuthController', () => {
       'refresh_token',
       expect.any(Object),
     );
+  });
+
+  it('returns the caller id and roles from the request', () => {
+    const request = { user: { id: 'user-1', roles: ['admin'] } } as never;
+
+    expect(controller.getSession(request)).toEqual({
+      id: 'user-1',
+      roles: ['admin'],
+    });
   });
 
   it('delegates password-reset request to PasswordResetService', async () => {
