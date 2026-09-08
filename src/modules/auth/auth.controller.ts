@@ -8,6 +8,7 @@ import {
   Query,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -22,11 +23,13 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import type { FastifyReply } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { ConfigService } from '@/core/config/config.service';
 
 import { AuthService, IssuedTokens } from './auth.service';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import type { RequestUser } from './guards/jwt-auth.guard';
 import { PasswordResetService } from './password-reset.service';
 import { RegisterRequestDto } from './dto/register-request.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
@@ -44,6 +47,10 @@ const ACCESS_TOKEN_COOKIE_NAME = 'access_token';
 const REFRESH_TOKEN_COOKIE_NAME = 'refresh_token';
 const ACCESS_TOKEN_MAX_AGE_SECONDS = 15 * 60;
 const REFRESH_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+interface RequestWithUser extends FastifyRequest {
+  user: RequestUser;
+}
 
 function extractMeta(req: {
   ip?: string;
@@ -344,5 +351,14 @@ export class AuthController {
     this.clearAuthCookies(reply);
 
     return result;
+  }
+
+  @Get('session')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Get the authenticated caller's id and roles" })
+  @ApiOkResponse({ description: 'Current session identity' })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  getSession(@Req() request: RequestWithUser): RequestUser {
+    return request.user;
   }
 }

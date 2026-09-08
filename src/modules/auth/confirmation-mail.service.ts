@@ -16,7 +16,7 @@ export class ConfirmationMailService {
     linkToken: string,
   ): Promise<void> {
     const baseUrl = this.configService.get('APP_BASE_URL');
-    const link = `${baseUrl}/auth/register/confirm/link?token=${linkToken}`;
+    const link = `${baseUrl}/register/confirm/link?token=${linkToken}`;
 
     const text = [
       'Confirm your registration',
@@ -41,7 +41,7 @@ export class ConfirmationMailService {
     linkToken: string,
   ): Promise<void> {
     const baseUrl = this.configService.get('APP_BASE_URL');
-    const link = `${baseUrl}/auth/login/verify/link?token=${linkToken}`;
+    const link = `${baseUrl}/login/verify/link?token=${linkToken}`;
 
     const text = [
       'Finish signing in',
@@ -66,7 +66,7 @@ export class ConfirmationMailService {
     linkToken: string,
   ): Promise<void> {
     const baseUrl = this.configService.get('APP_BASE_URL');
-    const link = `${baseUrl}/auth/password-reset/confirm/link?token=${linkToken}`;
+    const link = `${baseUrl}/reset-password?token=${linkToken}`;
 
     const text = [
       'Reset your password',
