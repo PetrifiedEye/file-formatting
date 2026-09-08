@@ -84,4 +84,29 @@ export class ConfirmationMailService {
       text,
     });
   }
+
+  async sendEmailChangeConfirmation(
+    to: string,
+    otp: string,
+    linkToken: string,
+  ): Promise<void> {
+    const baseUrl = this.configService.get('APP_BASE_URL');
+    const link = `${baseUrl}/account/email-change/confirm?token=${linkToken}`;
+
+    const text = [
+      'Confirm your new email address',
+      '',
+      `Your confirmation code: ${otp}`,
+      '',
+      `Or click this link: ${link}`,
+      '',
+      'This code and link expire in 10 minutes.',
+    ].join('\n');
+
+    await this.emailService.sendMail({
+      to,
+      subject: 'Confirm your new email address',
+      text,
+    });
+  }
 }

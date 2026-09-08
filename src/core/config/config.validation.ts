@@ -54,4 +54,11 @@ export const configValidationSchema = Joi.object<Config>({
    */
   APP_BASE_URL: Joi.string().uri().required(),
   CORS_ORIGINS: Joi.string().optional().default(''),
+
+  /**
+   * Local asset storage (profile photos)
+   */
+  ASSETS_DIR: Joi.string().required(),
+  ASSETS_BASE_URL: Joi.string().uri().required(),
+  PHOTO_MAX_SIZE_BYTES: Joi.number().optional().default(5242880),
 });

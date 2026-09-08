@@ -53,6 +53,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     JwtAuthGuard,
     TokenService,
     LoginAuditService,
+    ConfirmationMailService,
     forwardRef(() => UsersModule),
   ],
 })

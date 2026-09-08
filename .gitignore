@@ -3,6 +3,9 @@
 /node_modules
 /build
 
+# local asset storage (profile photos)
+/assets
+
 # Logs
 logs
 *.log

@@ -50,4 +50,11 @@ export interface Config {
    */
   APP_BASE_URL: string;
   CORS_ORIGINS?: string;
+
+  /**
+   * Local asset storage (profile photos)
+   */
+  ASSETS_DIR: string;
+  ASSETS_BASE_URL: string;
+  PHOTO_MAX_SIZE_BYTES?: number;
 }
