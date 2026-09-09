@@ -60,4 +60,7 @@ export class User {
 
   @Column({ name: 'deletion_started_at', type: 'timestamptz', nullable: true })
   deletionStartedAt!: Date | null;
+
+  @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })
+  lastLoginAt!: Date | null;
 }

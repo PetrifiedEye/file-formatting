@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AuthModule } from '@/modules/auth/auth.module';
@@ -12,9 +13,13 @@ import { AccountDeletionChallenge } from './entities/account-deletion-challenge.
 import { EmailChangeChallenge } from './entities/email-change-challenge.entity';
 import { ProfileAuditEvent } from './entities/profile-audit-event.entity';
 import { User } from './entities/user.entity';
+import { UserDirectoryAuditEvent } from './entities/user-directory-audit-event.entity';
 import { UserProfileAuditEvent } from './entities/user-profile-audit-event.entity';
 import { EmailChangeService } from './email-change.service';
 import { ProfileAuditService } from './profile-audit.service';
+import { UserDirectoryAuditFilter } from './user-directory-audit.filter';
+import { UserDirectoryAuditService } from './user-directory-audit.service';
+import { UserDirectoryService } from './user-directory.service';
 import { UsersAuditService } from './users-audit.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
@@ -28,6 +33,7 @@ import { UsersService } from './users.service';
       ProfileAuditEvent,
       AccountDeletionChallenge,
       AccountDeletionAuditEvent,
+      UserDirectoryAuditEvent,
     ]),
     StorageModule,
     forwardRef(() => AuthModule),
@@ -41,6 +47,9 @@ import { UsersService } from './users.service';
     EmailChangeService,
     AccountDeletionAuditService,
     AccountDeletionService,
+    UserDirectoryAuditService,
+    UserDirectoryService,
+    { provide: APP_FILTER, useClass: UserDirectoryAuditFilter },
   ],
   exports: [UsersService, UsersAuditService, TypeOrmModule],
 })

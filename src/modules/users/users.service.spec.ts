@@ -23,6 +23,7 @@ describe('UsersService', () => {
     findOne: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+    update: jest.Mock;
     delete: jest.Mock;
     remove: jest.Mock;
   };
@@ -38,6 +39,7 @@ describe('UsersService', () => {
       save: jest.fn((user: User) =>
         Promise.resolve({ ...user, id: user.id ?? 'user-id' }),
       ),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       delete: jest.fn(),
       remove: jest.fn(),
     };
@@ -331,6 +333,19 @@ describe('UsersService', () => {
         service.updatePhoto('user-1', Buffer.from('not an image')),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(storageService.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stampLastLoginAt', () => {
+    it('updates only lastLoginAt for the given user id', async () => {
+      const anyDate = expect.any(Date) as Date;
+
+      await service.stampLastLoginAt('user-1');
+
+      expect(repository.update).toHaveBeenCalledWith(
+        { id: 'user-1' },
+        { lastLoginAt: anyDate },
+      );
     });
   });
 
