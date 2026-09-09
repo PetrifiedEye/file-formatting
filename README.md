@@ -50,6 +50,21 @@ npm run migration:show       # List applied / pending
 
 CLI uses `src/database/data-source.ts`. At runtime, Nest uses the DataSource from `DatabaseModule`. If `POSTGRES_MIGRATIONS_RUN=true`, pending migrations also run on app start.
 
+### Seeding local/e2e accounts
+
+There is no self-service "become admin" path by design — admin and RBAC-manager accounts must be provisioned directly against the database. After `npm run migration:run`, run:
+
+```bash
+npm run seed:e2e
+```
+
+This creates (idempotently — safe to re-run) the two fixture accounts the frontend Playwright suite expects (`frontend/tests/e2e/support/seeded-users.ts`):
+
+- `admin@example.com` / `AdminPassword1!` — `admin` role (`rbac:manage`)
+- `rbac-manager@example.com` / `RbacPassword1!` — `rbac-manager` role (`rbac:manage`, `users:read`)
+
+Override emails/passwords via `E2E_ADMIN_EMAIL`, `E2E_ADMIN_PASSWORD`, `E2E_RBAC_USER_EMAIL`, `E2E_RBAC_USER_PASSWORD`. See `scripts/seed-e2e-users.ts`.
+
 ### E2E test database
 
 E2E tests run against a separate, isolated database (not your dev database), so `npm run test:e2e` never touches or destroys dev data:
