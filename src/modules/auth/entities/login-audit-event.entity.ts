@@ -46,8 +46,8 @@ export class LoginAuditEvent {
   })
   outcome!: LoginAuditOutcome;
 
-  @Column({ name: 'normalized_email', type: 'citext' })
-  normalizedEmail!: string;
+  @Column({ name: 'normalized_email', type: 'citext', nullable: true })
+  normalizedEmail!: string | null;
 
   @Column({ name: 'user_id', type: 'uuid', nullable: true })
   userId!: string | null;

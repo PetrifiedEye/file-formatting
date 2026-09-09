@@ -57,4 +57,7 @@ export class User {
 
   @Column({ name: 'photo_url', type: 'varchar', nullable: true })
   photoUrl!: string | null;
+
+  @Column({ name: 'deletion_started_at', type: 'timestamptz', nullable: true })
+  deletionStartedAt!: Date | null;
 }

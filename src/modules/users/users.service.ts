@@ -90,7 +90,7 @@ export class UsersService {
     return this.usersRepository.save(user);
   }
 
-  private toRelativeAssetPath(photoUrl: string | null): string | null {
+  toRelativeAssetPath(photoUrl: string | null): string | null {
     if (!photoUrl) {
       return null;
     }
