@@ -71,9 +71,11 @@ one column + one audit table + indexes; small AuthService touch to stamp
 | V. Observability & API Documentation | Swagger on the new handler and DTOs (`@ApiTags('users')` already on the controller). Audit every attempt (success/denied/unauthenticated/invalid/rate_limited) without PII. Health endpoint unchanged. | PASS |
 
 No violations. Complexity Tracking is not filled. The path-gated
-`UserDirectoryAuditFilter` (research §11) is a new file but not a
-constitution exception — it is the minimum way to record 401/429 required
-by FR-018 without changing global guards.
+`UserDirectoryAuditFilter` registered as `APP_FILTER` from `UsersModule`
+(research §11) is a new file but not a constitution exception — it is the
+minimum way to record 401/429 required by FR-018, including 429s thrown by
+the global `ThrottlerGuard`, without changing those guards. Path gating
+prevents it from auditing unrelated routes.
 
 ## Project Structure
 

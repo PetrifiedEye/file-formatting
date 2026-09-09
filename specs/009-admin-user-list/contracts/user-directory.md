@@ -131,6 +131,11 @@ Shape matches `@nestjs/throttler`. No items.
 8. Audit `success` with `resultCount` and option-kind flags (no search text,
    no emails). Best-effort; must not fail the 200.
 
+Outcomes `invalid`, `unauthenticated`, and `rate_limited` are written by
+`UserDirectoryAuditFilter` (`APP_FILTER`, path-gated to `GET /users`).
+`success` and `denied` are written by the list handler. The handler MUST
+NOT record `invalid` (rethrow cursor `BadRequestException` for the filter).
+
 ## Audit record (not in the HTTP body)
 
 Every attempt writes `user_directory_audit_events` as specified in
