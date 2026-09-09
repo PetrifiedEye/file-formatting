@@ -109,4 +109,29 @@ export class ConfirmationMailService {
       text,
     });
   }
+
+  async sendAccountDeletionConfirmation(
+    to: string,
+    otp: string,
+    linkToken: string,
+  ): Promise<void> {
+    const baseUrl = this.configService.get('APP_BASE_URL');
+    const link = `${baseUrl}/account/delete/confirm?token=${linkToken}`;
+
+    const text = [
+      'Confirm account deletion',
+      '',
+      `Your confirmation code: ${otp}`,
+      '',
+      `Or click this link: ${link}`,
+      '',
+      'This code and link expire in 10 minutes.',
+    ].join('\n');
+
+    await this.emailService.sendMail({
+      to,
+      subject: 'Confirm account deletion',
+      text,
+    });
+  }
 }

@@ -3,6 +3,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   HttpCode,
@@ -14,6 +15,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiAcceptedResponse,
   ApiBadRequestResponse,
   ApiConflictResponse,
   ApiConsumes,
@@ -34,11 +36,21 @@ import {
 } from '@/modules/auth/guards/jwt-auth.guard';
 import { AccessConfigService } from '@/modules/rbac/access-config.service';
 
+import { AccountDeletionAuditService } from './account-deletion-audit.service';
+import {
+  AccountDeletionService,
+  AdminDeleteResult,
+} from './account-deletion.service';
 import { AdminUpdateEmailDto } from './dto/admin-update-email.dto';
+import { ConfirmAccountDeletionDto } from './dto/confirm-account-deletion.dto';
 import { ConfirmEmailChangeDto } from './dto/confirm-email-change.dto';
 import { InitiateEmailChangeDto } from './dto/initiate-email-change.dto';
 import { UserProfileResponseDto } from './dto/user-profile-response.dto';
 import { EmailChangeService } from './email-change.service';
+import {
+  AccountDeletionAuditAction,
+  AccountDeletionAuditOutcome,
+} from './entities/account-deletion-audit-event.entity';
 import {
   ProfileAuditAction,
   ProfileAuditOutcome,
@@ -70,6 +82,8 @@ export class UsersController {
     private readonly emailChangeService: EmailChangeService,
     private readonly profileAuditService: ProfileAuditService,
     private readonly accessConfigService: AccessConfigService,
+    private readonly accountDeletionService: AccountDeletionService,
+    private readonly accountDeletionAuditService: AccountDeletionAuditService,
   ) {}
 
   @Get(':userId')
@@ -303,6 +317,113 @@ export class UsersController {
     );
 
     return { id: user.id, photo: user.photoUrl, email: user.email };
+  }
+
+  @Post('me/delete')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ default: { limit: 3, ttl: 600000 } })
+  @ApiOperation({ summary: 'Initiate deletion of the caller’s own account' })
+  @ApiAcceptedResponse({
+    description: 'Confirmation sent; nothing deleted yet',
+  })
+  @ApiConflictResponse({ description: 'Account is already mid-deletion' })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async initiateSelfDelete(
+    @Req() request: RequestWithUser,
+  ): Promise<{ message: string }> {
+    const user = await this.requireCallerUser(request);
+    return this.accountDeletionService.initiateSelfDelete(user);
+  }
+
+  @Post('me/delete/resend')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ default: { limit: 1, ttl: 60000 } })
+  @ApiOperation({ summary: 'Resend the pending self-deletion confirmation' })
+  @ApiAcceptedResponse({ description: 'New confirmation sent' })
+  @ApiBadRequestResponse({ description: 'No pending account deletion request' })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async resendSelfDelete(
+    @Req() request: RequestWithUser,
+  ): Promise<{ message: string }> {
+    const user = await this.requireCallerUser(request);
+    return this.accountDeletionService.resendSelfDelete(user);
+  }
+
+  @Post('me/delete/confirm')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Confirm and complete self-deletion' })
+  @ApiOkResponse({ description: 'Account deleted' })
+  @ApiBadRequestResponse({
+    description: 'Wrong code, expired, or attempts exhausted',
+  })
+  @ApiConflictResponse({ description: 'Account is already mid-deletion' })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async confirmSelfDelete(
+    @Req() request: RequestWithUser,
+    @Body() dto: ConfirmAccountDeletionDto,
+  ): Promise<{ message: string }> {
+    const user = await this.requireCallerUser(request);
+    return this.accountDeletionService.confirmSelfDelete(user, dto.code);
+  }
+
+  @Delete(':userId')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: "Directly delete another user's account (admin)" })
+  @ApiOkResponse({ description: 'Account deleted, or already removed' })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiForbiddenResponse({
+    description: 'Missing permission, or caller targeted themselves',
+  })
+  @ApiConflictResponse({ description: 'Account is already mid-deletion' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async adminDeleteUser(
+    @Param('userId') userId: string,
+    @Req() request: RequestWithUser,
+  ): Promise<{ message: string }> {
+    const hasPermission = this.accessConfigService.hasPermission(
+      request.user.roles,
+      'users',
+      'delete',
+    );
+
+    if (!hasPermission || userId === request.user.id) {
+      await this.accountDeletionAuditService.record(
+        request.user.id,
+        userId,
+        AccountDeletionAuditAction.ADMIN_DELETE,
+        AccountDeletionAuditOutcome.DENIED,
+      );
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    let result: AdminDeleteResult;
+    try {
+      result = await this.accountDeletionService.adminDelete(userId);
+    } catch (error) {
+      await this.accountDeletionAuditService.record(
+        request.user.id,
+        userId,
+        AccountDeletionAuditAction.ADMIN_DELETE,
+        AccountDeletionAuditOutcome.CONFLICT,
+      );
+      throw error;
+    }
+
+    await this.accountDeletionAuditService.record(
+      request.user.id,
+      userId,
+      AccountDeletionAuditAction.ADMIN_DELETE,
+      result.outcome === 'deleted'
+        ? AccountDeletionAuditOutcome.SUCCESS
+        : AccountDeletionAuditOutcome.NOT_FOUND,
+    );
+
+    return { message: result.message };
   }
 
   private async requireCallerUser(request: RequestWithUser): Promise<User> {

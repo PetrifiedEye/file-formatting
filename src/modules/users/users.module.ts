@@ -5,6 +5,10 @@ import { AuthModule } from '@/modules/auth/auth.module';
 import { RbacModule } from '@/modules/rbac/rbac.module';
 import { StorageModule } from '@/core/storage/storage.module';
 
+import { AccountDeletionAuditService } from './account-deletion-audit.service';
+import { AccountDeletionService } from './account-deletion.service';
+import { AccountDeletionAuditEvent } from './entities/account-deletion-audit-event.entity';
+import { AccountDeletionChallenge } from './entities/account-deletion-challenge.entity';
 import { EmailChangeChallenge } from './entities/email-change-challenge.entity';
 import { ProfileAuditEvent } from './entities/profile-audit-event.entity';
 import { User } from './entities/user.entity';
@@ -22,6 +26,8 @@ import { UsersService } from './users.service';
       UserProfileAuditEvent,
       EmailChangeChallenge,
       ProfileAuditEvent,
+      AccountDeletionChallenge,
+      AccountDeletionAuditEvent,
     ]),
     StorageModule,
     forwardRef(() => AuthModule),
@@ -33,6 +39,8 @@ import { UsersService } from './users.service';
     UsersAuditService,
     ProfileAuditService,
     EmailChangeService,
+    AccountDeletionAuditService,
+    AccountDeletionService,
   ],
   exports: [UsersService, UsersAuditService, TypeOrmModule],
 })
