@@ -11,6 +11,9 @@ import {
   AccountDeletionAuditOutcome,
 } from './entities/account-deletion-audit-event.entity';
 import { ProfileAuditService } from './profile-audit.service';
+import { UserDirectoryAuditOutcome } from './entities/user-directory-audit-event.entity';
+import { UserDirectoryAuditService } from './user-directory-audit.service';
+import { UserDirectoryService } from './user-directory.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { EmailChangeService } from './email-change.service';
@@ -20,6 +23,8 @@ describe('UsersController', () => {
   let accessConfigService: { hasPermission: jest.Mock };
   let accountDeletionService: { adminDelete: jest.Mock };
   let accountDeletionAuditService: { record: jest.Mock };
+  let userDirectoryService: { list: jest.Mock };
+  let userDirectoryAuditService: { record: jest.Mock };
 
   function buildRequest(callerId: string, roles: string[] = []) {
     return { user: { id: callerId, roles } } as never;
@@ -29,6 +34,10 @@ describe('UsersController', () => {
     accessConfigService = { hasPermission: jest.fn() };
     accountDeletionService = { adminDelete: jest.fn() };
     accountDeletionAuditService = {
+      record: jest.fn().mockResolvedValue(undefined),
+    };
+    userDirectoryService = { list: jest.fn() };
+    userDirectoryAuditService = {
       record: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -43,6 +52,11 @@ describe('UsersController', () => {
         {
           provide: AccountDeletionAuditService,
           useValue: accountDeletionAuditService,
+        },
+        { provide: UserDirectoryService, useValue: userDirectoryService },
+        {
+          provide: UserDirectoryAuditService,
+          useValue: userDirectoryAuditService,
         },
       ],
     })
@@ -105,6 +119,70 @@ describe('UsersController', () => {
         AccountDeletionAuditAction.ADMIN_DELETE,
         AccountDeletionAuditOutcome.SUCCESS,
       );
+    });
+  });
+
+  describe('GET /users guard', () => {
+    it('denies, audits DENIED, and never calls UserDirectoryService.list when the caller lacks users.list', async () => {
+      accessConfigService.hasPermission.mockReturnValue(false);
+
+      await expect(
+        controller.listUsers({}, buildRequest('caller-1', ['reader'])),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(accessConfigService.hasPermission).toHaveBeenCalledWith(
+        ['reader'],
+        'users',
+        'list',
+      );
+      expect(userDirectoryAuditService.record).toHaveBeenCalledWith({
+        actorId: 'caller-1',
+        outcome: UserDirectoryAuditOutcome.DENIED,
+      });
+      expect(userDirectoryService.list).not.toHaveBeenCalled();
+    });
+
+    it('lists and audits SUCCESS with resultCount and option-kind flags when permitted', async () => {
+      accessConfigService.hasPermission.mockReturnValue(true);
+      const page = {
+        items: [{ id: 'user-1' }, { id: 'user-2' }],
+        nextCursor: null,
+      };
+      userDirectoryService.list.mockResolvedValue(page);
+
+      const result = await controller.listUsers(
+        { search: 'alice', status: undefined, sort: 'email' } as never,
+        buildRequest('caller-1', ['admin']),
+      );
+
+      expect(result).toBe(page);
+      expect(userDirectoryAuditService.record).toHaveBeenCalledWith({
+        actorId: 'caller-1',
+        outcome: UserDirectoryAuditOutcome.SUCCESS,
+        resultCount: 2,
+        searchUsed: true,
+        statusFilterUsed: false,
+        sortField: 'email',
+      });
+    });
+
+    it('defaults sortField to createdAt and flags to false when no options are supplied', async () => {
+      accessConfigService.hasPermission.mockReturnValue(true);
+      userDirectoryService.list.mockResolvedValue({
+        items: [],
+        nextCursor: null,
+      });
+
+      await controller.listUsers({}, buildRequest('caller-1', ['admin']));
+
+      expect(userDirectoryAuditService.record).toHaveBeenCalledWith({
+        actorId: 'caller-1',
+        outcome: UserDirectoryAuditOutcome.SUCCESS,
+        resultCount: 0,
+        searchUsed: false,
+        statusFilterUsed: false,
+        sortField: 'createdAt',
+      });
     });
   });
 });

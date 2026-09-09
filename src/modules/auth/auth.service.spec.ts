@@ -57,6 +57,7 @@ describe('AuthService', () => {
     isLockedOut: jest.fn().mockReturnValue(false),
     recordFailedLogin: jest.fn(),
     recordSuccessfulLogin: jest.fn(),
+    stampLastLoginAt: jest.fn(),
   };
 
   const settingsService = {
@@ -275,6 +276,7 @@ describe('AuthService', () => {
         LoginAuditOutcome.SUCCESS,
         expect.any(Object),
       );
+      expect(usersService.stampLastLoginAt).toHaveBeenCalledWith('user-1');
     });
 
     it('rejects wrong password with a generic message', async () => {
@@ -384,6 +386,7 @@ describe('AuthService', () => {
       expect(
         confirmationMailService.sendLoginVerificationEmail,
       ).toHaveBeenCalledWith('user@example.com', '123456', 'link-token');
+      expect(usersService.stampLastLoginAt).not.toHaveBeenCalled();
     });
   });
 
@@ -408,6 +411,7 @@ describe('AuthService', () => {
         refreshToken: 'refresh-token',
       });
       expect(result.response.message).toBe('Signed in.');
+      expect(usersService.stampLastLoginAt).toHaveBeenCalledWith('user-1');
     });
 
     it('throws 404 when there is no pending verification', async () => {
@@ -547,6 +551,7 @@ describe('AuthService', () => {
         LoginAuditOutcome.SUCCESS,
         expect.objectContaining({ userId: 'user-1' }),
       );
+      expect(usersService.stampLastLoginAt).not.toHaveBeenCalled();
     });
 
     it('rejects a missing refresh token without issuing cookies', async () => {

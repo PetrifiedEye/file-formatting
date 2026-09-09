@@ -250,4 +250,11 @@ export class UsersService {
     user.lockedUntil = null;
     return this.usersRepository.save(user);
   }
+
+  async stampLastLoginAt(userId: string): Promise<void> {
+    await this.usersRepository.update(
+      { id: userId },
+      { lastLoginAt: new Date() },
+    );
+  }
 }

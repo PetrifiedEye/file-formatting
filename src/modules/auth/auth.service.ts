@@ -205,6 +205,7 @@ export class AuthService {
     }
 
     const tokens = await this.issueTokens(user.id);
+    await this.usersService.stampLastLoginAt(user.id);
 
     return {
       response: {
@@ -290,6 +291,7 @@ export class AuthService {
     }
 
     const tokens = await this.issueTokens(user.id);
+    await this.usersService.stampLastLoginAt(user.id);
 
     await this.loginAuditService.record(
       LoginAuditEventType.LOGIN_VERIFICATION_ATTEMPT,

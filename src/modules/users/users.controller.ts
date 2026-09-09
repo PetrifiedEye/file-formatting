@@ -11,6 +11,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -45,18 +46,23 @@ import { AdminUpdateEmailDto } from './dto/admin-update-email.dto';
 import { ConfirmAccountDeletionDto } from './dto/confirm-account-deletion.dto';
 import { ConfirmEmailChangeDto } from './dto/confirm-email-change.dto';
 import { InitiateEmailChangeDto } from './dto/initiate-email-change.dto';
+import { ListUsersQueryDto } from './dto/list-users-query.dto';
+import { UserDirectoryPageDto } from './dto/user-directory-page.dto';
 import { UserProfileResponseDto } from './dto/user-profile-response.dto';
 import { EmailChangeService } from './email-change.service';
 import {
   AccountDeletionAuditAction,
   AccountDeletionAuditOutcome,
 } from './entities/account-deletion-audit-event.entity';
+import { UserDirectoryAuditOutcome } from './entities/user-directory-audit-event.entity';
 import {
   ProfileAuditAction,
   ProfileAuditOutcome,
 } from './entities/profile-audit-event.entity';
 import { User } from './entities/user.entity';
 import { ProfileAuditService } from './profile-audit.service';
+import { UserDirectoryAuditService } from './user-directory-audit.service';
+import { UserDirectoryService } from './user-directory.service';
 import { UsersService } from './users.service';
 
 interface RequestWithUser extends FastifyRequest {
@@ -84,7 +90,49 @@ export class UsersController {
     private readonly accessConfigService: AccessConfigService,
     private readonly accountDeletionService: AccountDeletionService,
     private readonly accountDeletionAuditService: AccountDeletionAuditService,
+    private readonly userDirectoryService: UserDirectoryService,
+    private readonly userDirectoryAuditService: UserDirectoryAuditService,
   ) {}
+
+  @Get()
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @ApiOperation({ summary: 'List administrator-visible user accounts' })
+  @ApiOkResponse({ type: UserDirectoryPageDto })
+  @ApiBadRequestResponse({ description: 'Invalid query options or cursor' })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiForbiddenResponse({ description: 'Insufficient permissions' })
+  @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  async listUsers(
+    @Query() query: ListUsersQueryDto,
+    @Req() request: RequestWithUser,
+  ): Promise<UserDirectoryPageDto> {
+    const hasPermission = this.accessConfigService.hasPermission(
+      request.user.roles,
+      'users',
+      'list',
+    );
+
+    if (!hasPermission) {
+      await this.userDirectoryAuditService.record({
+        actorId: request.user.id,
+        outcome: UserDirectoryAuditOutcome.DENIED,
+      });
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    const page = await this.userDirectoryService.list(query);
+
+    await this.userDirectoryAuditService.record({
+      actorId: request.user.id,
+      outcome: UserDirectoryAuditOutcome.SUCCESS,
+      resultCount: page.items.length,
+      searchUsed: query.search !== undefined && query.search.length > 0,
+      statusFilterUsed: query.status !== undefined,
+      sortField: query.sort ?? 'createdAt',
+    });
+
+    return page;
+  }
 
   @Get(':userId')
   @ApiOperation({ summary: "Get a user's profile" })
