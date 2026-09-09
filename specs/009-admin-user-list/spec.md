@@ -21,7 +21,7 @@ An administrator with directory-listing rights opens the user directory and rece
 **Acceptance Scenarios**:
 
 1. **Given** an authenticated administrator with user-directory listing rights and more users than one page, **When** they request the user directory without search or filters, **Then** they receive a successful result containing only one page of user summaries and a continuation token for the next page.
-2. **Given** an authenticated administrator with listing rights and no more users than one page, **When** they request the user directory, **Then** they receive every matching user on that single page and no continuation token.
+2. **Given** an authenticated administrator with listing rights and no more users than one page, **When** they request the user directory, **Then** they receive every matching user on that single page and a continuation token field whose value is null.
 3. **Given** an authenticated administrator with listing rights, **When** they request the next page using a previously issued continuation token and the same listing options, **Then** they receive the next disjoint page of users (no duplicates from the prior page) or an empty page if they have reached the end.
 4. **Given** an authenticated administrator with listing rights, **When** they request the directory, **Then** each item includes account id, email, profile photo URL (or an empty photo when none is uploaded), account status, and created date.
 
@@ -96,7 +96,7 @@ Each attempt to list users is recorded so security review can see who asked, whe
 
 ### Edge Cases
 
-- What happens when no users match the search or filter? The result is successful with an empty item list and no continuation token.
+- What happens when no users match the search or filter? The result is successful with an empty item list and a continuation token field whose value is null.
 - What happens when repeated directory requests exceed the configured rate limit? Further requests are rejected until the window resets, regardless of whether the caller is an administrator.
 - What happens when a user's listing permission is revoked between sign-in and the request? The decision uses current permissions at request time, not permissions remembered from sign-in.
 - What happens when an account is deleted (or is in the process of being deleted) while an administrator is paging through the directory? Fully removed accounts and accounts already being deleted are omitted from subsequent pages; a continuation token must not error solely because a previously listed account disappeared.
@@ -113,7 +113,7 @@ Each attempt to list users is recorded so security review can see who asked, whe
 - **FR-002**: System MUST deny the directory request with a 403 response and no items when the caller is authenticated but does not hold `users.list`.
 - **FR-003**: System MUST reject unauthenticated directory requests with a 401 response and no items, before evaluating permissions or loading users.
 - **FR-004**: System MUST always paginate the directory. Callers MAY supply a page size; the default is 20 and the allowed range is 1–100 inclusive. Requests outside that range MUST be rejected.
-- **FR-005**: System MUST support cursor-style pagination: a successful page that has more matching users MUST include an opaque continuation token; a page with no further results MUST include an empty continuation token. The token is optional on the first request.
+- **FR-005**: System MUST support cursor-style pagination. On the HTTP contract the continuation token is request query `cursor` and response field `nextCursor`. A successful page that has more matching users MUST set `nextCursor` to a non-empty opaque string; a page with no further results (including zero matches) MUST set `nextCursor` to null (JSON `null`, not an empty string, and the field MUST still be present). `cursor` is optional on the first request.
 - **FR-006**: Repeating the same listing options with the same continuation token MUST return the same page of account ids (stable, idempotent pagination) while those accounts remain listable.
 - **FR-007**: System MUST support an optional search phrase that matches against email (case-insensitive partial match) and against account id (exact match). No other fields may be searched.
 - **FR-008**: System MUST support an optional status filter. Supported filter values for this feature are `active` and `pending_confirmation`. Unrecognized values MUST be rejected.
@@ -126,14 +126,14 @@ Each attempt to list users is recorded so security review can see who asked, whe
 - **FR-015**: Accounts that have already been fully deleted, and accounts already in the process of being deleted, MUST NOT appear in the directory.
 - **FR-016**: System MUST apply a rate limit to the user-directory operation to limit scraping and bulk extraction of personal data.
 - **FR-017**: System MUST evaluate `users.list` at request time (not from a permission snapshot taken at sign-in).
-- **FR-018**: System MUST record an audit entry for every directory attempt, capturing the actor's user id when authenticated, the outcome (success, forbidden, unauthenticated, invalid, or rate-limited), the number of items returned on success, and which option kinds were present (search used, status filter used, sort field) — without storing the search phrase, email values, or other personal data.
+- **FR-018**: System MUST record an audit entry for every directory attempt, capturing the actor's user id when authenticated, the outcome (success, denied, unauthenticated, invalid, or rate-limited), the number of items returned on success, and which option kinds were present (search used, status filter used, sort field) — without storing the search phrase, email values, or other personal data.
 - **FR-019**: The Admin role MUST be granted `users.list` by default. No other existing role receives it unless an administrator later grants it through the existing access-control configuration.
 - **FR-020**: Holding `users.read` (view a single profile) MUST NOT by itself grant directory listing.
 
 ### Key Entities
 
 - **User Directory Item**: A summary of one listable account for administrative review. Contains account id, email, profile photo URL or null, created date, account status, and last successful sign-in or null.
-- **Directory Page**: A bounded set of user directory items plus an optional continuation token for the next page.
+- **Directory Page**: A bounded set of user directory items plus `nextCursor`: a non-empty opaque continuation token when another page exists, or null when this is the last page.
 - **Listable Account**: A user account that still exists and is not in the process of being deleted. Statuses in scope are `active` (sign-in ready) and `pending_confirmation` (awaiting registration confirmation).
 - **User Directory Audit Record**: A log entry for a directory attempt: actor id (if any), outcome, result count, and option kinds — never item payloads or search text.
 

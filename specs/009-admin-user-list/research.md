@@ -237,14 +237,30 @@ Never persist search text, email values, cursors, or item payloads.
 
 | Outcome | Writer |
 |---|---|
-| `success`, `denied`, `invalid` | list handler / `UserDirectoryService` (after auth) |
-| `unauthenticated`, `rate_limited` | a small `UserDirectoryAuditFilter` on `UsersController`, gated to `GET` + collection path `/users` (no extra segments). Catches `UnauthorizedException` from class-level `JwtAuthGuard` and `ThrottlerException` from `ThrottlerGuard` |
+| `success`, `denied` | list handler only |
+| `invalid`, `unauthenticated`, `rate_limited` | `UserDirectoryAuditFilter` (single writer for all three) |
+
+The filter is registered as a global `APP_FILTER` and gates on `GET` +
+collection path `/users` (no extra segments). It catches
+`BadRequestException` (ValidationPipe enum/limit failures and cursor
+`Invalid cursor`), `UnauthorizedException` (`JwtAuthGuard`), and
+`ThrottlerException` (global `ThrottlerGuard`). It does **not** catch
+`ForbiddenException` (handler already recorded `denied`).
+
+The list handler MUST NOT call `record()` for cursor 400s — rethrow
+`BadRequestException` and let the filter write `invalid` once.
+Option-kind flags on filter-written rows use query-parameter presence
+only (no search text, no emails); null if the query is unavailable.
 
 **Rationale**: FR-018 requires 401 and 429 rows, but those exceptions are
 thrown by guards before the handler. This repo has no existing exception
-filters; a path-gated filter is the minimum hook that can observe them
-without changing `JwtAuthGuard` or the global throttler. Best-effort: a
-failed audit write must not change the HTTP outcome (spec assumption).
+filters; a path-gated global `APP_FILTER` is the minimum hook that can
+observe them without changing `JwtAuthGuard` or the global throttler.
+A controller-scoped `@UseFilters` is **not** sufficient for 429:
+`ThrottlerGuard` is `APP_GUARD` in `AppModule`, and controller filters
+often never see that exception. Path gating prevents the filter from
+auditing unrelated routes. Best-effort: a failed audit write must not
+change the HTTP outcome (spec assumption).
 
 **Alternatives considered**: Skipping 401/429 in the directory table
 (violates FR-018). Subclassing `JwtAuthGuard` (too invasive). A generic
