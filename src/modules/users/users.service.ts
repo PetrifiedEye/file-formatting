@@ -229,6 +229,14 @@ export class UsersService {
   }
 
   async recordFailedLogin(user: User, now = new Date()): Promise<User> {
+    // An elapsed lockout starts a fresh attempt window. Without this reset the
+    // counter stays at or above the threshold forever, so the first mistyped
+    // password after a lockout expires re-locks the account indefinitely.
+    if (user.lockedUntil && user.lockedUntil.getTime() <= now.getTime()) {
+      user.failedLoginAttempts = 0;
+      user.lockedUntil = null;
+    }
+
     user.failedLoginAttempts += 1;
 
     if (user.failedLoginAttempts >= LOCKOUT_THRESHOLD) {

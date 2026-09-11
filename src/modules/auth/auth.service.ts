@@ -216,7 +216,6 @@ export class AuthService {
     };
   }
 
-  @Transactional()
   async verifyLogin(
     dto: LoginVerifyRequestDto,
     meta: RequestMeta = {},
@@ -250,7 +249,6 @@ export class AuthService {
     return this.finalizeLoginVerification(result, normalizedEmail, user, meta);
   }
 
-  @Transactional()
   async verifyLoginByLink(
     token: string,
     meta: RequestMeta = {},
@@ -512,7 +510,6 @@ export class AuthService {
     return this.buildRegisterResponse(true);
   }
 
-  @Transactional()
   async confirmByCode(
     dto: ConfirmCodeRequestDto,
     meta: RequestMeta,
@@ -582,7 +579,6 @@ export class AuthService {
     return { message: CONFIRM_SUCCESS_MESSAGE, accountReady: true };
   }
 
-  @Transactional()
   async confirmByLink(
     token: string,
     meta: RequestMeta,
@@ -797,6 +793,10 @@ export class AuthService {
     }
   }
 
+  // Only the activation itself needs to be atomic. The verification methods
+  // above must stay outside a transaction: they decrement attempt counters and
+  // write FAILURE audit rows and then throw, which would roll both back.
+  @Transactional()
   private async activateUserWithChallenge(
     user: User,
     challenge: ConfirmationChallenge,

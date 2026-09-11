@@ -694,4 +694,124 @@ describe('Auth Login (e2e)', () => {
       await request(app.getHttpServer()).get('/rbac/roles').expect(401);
     });
   });
+  describe('OTP attempt counters (regression)', () => {
+    it('decrements the sign-in challenge counter on every wrong code', async () => {
+      const email = `verifycount-${Date.now()}@example.com`;
+      const password = 'CorrectHorse123!';
+      await registerActiveUser(email, password);
+
+      await settingsRepository.update(1, {
+        signInConfirmationEnabled: true,
+      });
+
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password })
+        .expect(200);
+
+      const user = await usersRepository.findOneOrFail({ where: { email } });
+      const issued = await loginChallengeRepository.findOneOrFail({
+        where: { userId: user.id },
+      });
+      expect(issued.attemptsRemaining).toBe(5);
+
+      for (let i = 0; i < 3; i += 1) {
+        await request(app.getHttpServer())
+          .post('/auth/login/verify')
+          .send({ email, code: '000000' })
+          .expect(400);
+        clearThrottler();
+      }
+
+      const after = await loginChallengeRepository.findOneOrFail({
+        where: { userId: user.id },
+      });
+      expect(after.attemptsRemaining).toBe(2);
+
+      const failures = await loginAuditRepository.find({
+        where: { userId: user.id },
+      });
+      expect(
+        failures.filter((e) => e.failureReason === 'wrong_code'),
+      ).toHaveLength(3);
+    });
+
+    it('decrements the password-reset challenge counter on every wrong code', async () => {
+      const email = `resetcount-${Date.now()}@example.com`;
+      const password = 'CorrectHorse123!';
+      await registerActiveUser(email, password);
+
+      await settingsRepository.update(1, {
+        passwordRecoveryConfirmationEnabled: true,
+      });
+
+      await request(app.getHttpServer())
+        .post('/auth/password-reset/request')
+        .send({ email })
+        .expect(200);
+      clearThrottler();
+
+      const user = await usersRepository.findOneOrFail({ where: { email } });
+      const issued = await passwordResetChallengeRepository.findOneOrFail({
+        where: { userId: user.id },
+      });
+      expect(issued.attemptsRemaining).toBe(5);
+
+      for (let i = 0; i < 3; i += 1) {
+        await request(app.getHttpServer())
+          .post('/auth/password-reset/confirm')
+          .send({ email, code: '000000', newPassword: 'AnotherPassword1!' })
+          .expect(400);
+        clearThrottler();
+      }
+
+      const after = await passwordResetChallengeRepository.findOneOrFail({
+        where: { userId: user.id },
+      });
+      expect(after.attemptsRemaining).toBe(2);
+
+      const failures = await loginAuditRepository.find({
+        where: { userId: user.id },
+      });
+      expect(
+        failures.filter((e) => e.failureReason === 'wrong_code'),
+      ).toHaveLength(3);
+    });
+  });
+
+  describe('Lockout counter reset (regression)', () => {
+    it('does not re-lock the account on a single wrong password after the lockout elapsed', async () => {
+      const email = `lockout3-${Date.now()}@example.com`;
+      const password = 'CorrectHorse123!';
+      await registerActiveUser(email, password);
+
+      for (let i = 0; i < 5; i += 1) {
+        await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({ email, password: 'wrong-password' })
+          .expect(401);
+        clearThrottler();
+      }
+
+      await usersRepository.update(
+        { email },
+        { lockedUntil: new Date(Date.now() - 1000) },
+      );
+
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password: 'wrong-password' })
+        .expect(401);
+      clearThrottler();
+
+      const user = await usersRepository.findOneOrFail({ where: { email } });
+      expect(user.failedLoginAttempts).toBe(1);
+      expect(user.lockedUntil).toBeNull();
+
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password })
+        .expect(200);
+    });
+  });
 });
