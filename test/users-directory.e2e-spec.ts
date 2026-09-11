@@ -598,4 +598,66 @@ describe('Admin User Directory (e2e)', () => {
       expect(secondIds.some((id) => firstIds.includes(id))).toBe(false);
     });
   });
+  describe('Sub-millisecond createdAt pagination (regression)', () => {
+    // Rows created by `now()`/`clock_timestamp()` carry microseconds, which the
+    // pg driver drops when it materialises a JS Date. A cursor built from that
+    // truncated value used to loop forever (ASC) or skip rows (DESC).
+    async function seedMicrosecondUsers(count: number): Promise<string[]> {
+      const passwordHash = await hashPassword(TEST_PASSWORD);
+      const stamp = `${Date.now()}-${Math.random()}`;
+      const ids: string[] = [];
+
+      for (let i = 0; i < count; i++) {
+        const rows: { id: string }[] = await userRepository.query(
+          `INSERT INTO users (email, password_hash, status, confirmed_at, created_at, updated_at)
+           VALUES ($1, $2, 'active', clock_timestamp(), clock_timestamp(), clock_timestamp())
+           RETURNING id`,
+          [`micro-${i}-${stamp}@example.com`, passwordHash],
+        );
+        ids.push(rows[0].id);
+      }
+
+      return ids;
+    }
+
+    async function pageThrough(direction: 'asc' | 'desc'): Promise<string[]> {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+
+      for (let page = 0; page < 20; page++) {
+        const query = `/users?limit=3&sort=createdAt&direction=${direction}${
+          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+        }`;
+        const response = await request(app.getHttpServer())
+          .get(query)
+          .set('Cookie', adminCookie)
+          .expect(200);
+        const body = response.body as DirectoryPageBody;
+
+        for (const item of body.items) {
+          expect(seen).not.toContain(item.id);
+          seen.push(item.id);
+        }
+
+        cursor = body.nextCursor;
+        if (!cursor) {
+          return seen;
+        }
+      }
+
+      throw new Error('Pagination did not terminate within 20 pages');
+    }
+
+    it('reaches every row when paging ascending', async () => {
+      const ids = await seedMicrosecondUsers(10);
+      const seen = await pageThrough('asc');
+      expect(ids.every((id) => seen.includes(id))).toBe(true);
+    });
+
+    it('reaches every row when paging descending', async () => {
+      const ids = await seedMicrosecondUsers(10);
+      const seen = await pageThrough('desc');
+      expect(ids.every((id) => seen.includes(id))).toBe(true);
+    });
+  });
 });

@@ -118,6 +118,7 @@ export class AuthController {
 
   @Post('register/confirm/code')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: 'Confirm registration with OTP' })
   @ApiOkResponse({ type: ConfirmSuccessResponseDto })
   @ApiBadRequestResponse({
@@ -311,6 +312,7 @@ export class AuthController {
 
   @Post('password-reset/confirm')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: 'Confirm a password reset with a new password' })
   @ApiOkResponse({ description: 'Password reset' })
   @ApiBadRequestResponse({

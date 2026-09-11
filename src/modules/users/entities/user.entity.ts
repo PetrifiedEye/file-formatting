@@ -39,10 +39,12 @@ export class User {
   @Column({ name: 'confirmed_at', type: 'timestamptz', nullable: true })
   confirmedAt!: Date | null;
 
-  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  // Millisecond precision keeps the DB -> JS Date -> DB round trip lossless,
+  // which the directory's keyset cursors depend on.
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz', precision: 3 })
   createdAt!: Date;
 
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz', precision: 3 })
   updatedAt!: Date;
 
   @Column({
@@ -61,6 +63,11 @@ export class User {
   @Column({ name: 'deletion_started_at', type: 'timestamptz', nullable: true })
   deletionStartedAt!: Date | null;
 
-  @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'last_login_at',
+    type: 'timestamptz',
+    precision: 3,
+    nullable: true,
+  })
   lastLoginAt!: Date | null;
 }

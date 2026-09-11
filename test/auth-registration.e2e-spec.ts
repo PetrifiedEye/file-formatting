@@ -389,4 +389,95 @@ describe('Auth Registration (e2e)', () => {
         .expect(429);
     });
   });
+  describe('Scenario 8 — OTP attempt counter (regression)', () => {
+    it('decrements attemptsRemaining and audits every wrong code', async () => {
+      await settingsRepository.update(1, {
+        registrationConfirmationEnabled: true,
+      });
+
+      const email = `scenario8-${Date.now()}@example.com`;
+
+      await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ email, password: 'validpass1' })
+        .expect(201);
+
+      const user = await usersRepository.findOneOrFail({ where: { email } });
+      const issued = await challengeRepository.findOneOrFail({
+        where: { userId: user.id },
+      });
+      expect(issued.attemptsRemaining).toBe(5);
+
+      for (let i = 0; i < 3; i++) {
+        await request(app.getHttpServer())
+          .post('/auth/register/confirm/code')
+          .send({ email, code: '000000' })
+          .expect(400);
+        clearThrottler();
+      }
+
+      const afterWrongCodes = await challengeRepository.findOneOrFail({
+        where: { userId: user.id },
+      });
+      expect(afterWrongCodes.attemptsRemaining).toBe(2);
+
+      const failures = await auditRepository.find({
+        where: {
+          normalizedEmail: email,
+          eventType: RegistrationAuditEventType.CONFIRMATION_ATTEMPT,
+          outcome: RegistrationAuditOutcome.FAILURE,
+        },
+      });
+      expect(failures).toHaveLength(3);
+      expect(failures.every((e) => e.failureReason === 'wrong_code')).toBe(
+        true,
+      );
+    });
+
+    it('rejects a valid code once the attempts are spent', async () => {
+      await settingsRepository.update(1, {
+        registrationConfirmationEnabled: true,
+      });
+
+      const email = `scenario8b-${Date.now()}@example.com`;
+
+      await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ email, password: 'validpass1' })
+        .expect(201);
+
+      const user = await usersRepository.findOneOrFail({ where: { email } });
+      const challenge = await challengeRepository.findOneOrFail({
+        where: { userId: user.id },
+      });
+
+      let otp: string | null = null;
+      for (let i = 100000; i < 1000000 && !otp; i++) {
+        const code = i.toString();
+        const hash = createHash('sha256').update(code).digest('hex');
+        if (hash === challenge.otpHash) {
+          otp = code;
+        }
+      }
+      const wrongCode = otp === '000000' ? '111111' : '000000';
+
+      for (let i = 0; i < 5; i++) {
+        await request(app.getHttpServer())
+          .post('/auth/register/confirm/code')
+          .send({ email, code: wrongCode })
+          .expect(400);
+        clearThrottler();
+      }
+
+      await request(app.getHttpServer())
+        .post('/auth/register/confirm/code')
+        .send({ email, code: otp })
+        .expect(400);
+
+      const stillPending = await usersRepository.findOneOrFail({
+        where: { email },
+      });
+      expect(stillPending.status).toBe(UserStatus.PENDING_CONFIRMATION);
+    });
+  });
 });

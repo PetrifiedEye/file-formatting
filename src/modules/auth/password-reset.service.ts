@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Transactional } from 'typeorm-transactional';
 
-import { UserStatus } from '@/modules/users/entities/user.entity';
+import { User, UserStatus } from '@/modules/users/entities/user.entity';
 import { UsersService } from '@/modules/users/users.service';
 import { SettingsService } from '@/modules/settings/settings.service';
 import { validatePassword } from '@/modules/settings/password-policy.validator';
@@ -98,7 +98,6 @@ export class PasswordResetService {
     return { message: REQUEST_MESSAGE };
   }
 
-  @Transactional()
   async confirmReset(
     dto: PasswordResetConfirmDto,
     meta: RequestMeta,
@@ -156,11 +155,8 @@ export class PasswordResetService {
       throw new BadRequestException(GENERIC_CONFIRM_FAILURE);
     }
 
-    challenge.consumedAt = new Date();
-    await this.challengeRepository.save(challenge);
-
     const passwordHash = await hashPassword(dto.newPassword);
-    await this.usersService.updatePassword(user, passwordHash);
+    await this.applyReset(challenge, user, passwordHash);
 
     await this.loginAuditService.record(
       LoginAuditEventType.PASSWORD_RESET_ATTEMPT,
@@ -174,6 +170,21 @@ export class PasswordResetService {
     );
 
     return { message: RESET_SUCCESS_MESSAGE };
+  }
+
+  // Only consuming the challenge and rotating the password need to be atomic.
+  // `confirmReset` itself must stay outside a transaction: it decrements the
+  // attempt counter and writes FAILURE audit rows and then throws, which a
+  // surrounding transaction would roll back.
+  @Transactional()
+  private async applyReset(
+    challenge: PasswordResetChallenge,
+    user: User,
+    passwordHash: string,
+  ): Promise<void> {
+    challenge.consumedAt = new Date();
+    await this.challengeRepository.save(challenge);
+    await this.usersService.updatePassword(user, passwordHash);
   }
 
   async exchangeLinkToken(token: string): Promise<ExchangedLinkToken> {
