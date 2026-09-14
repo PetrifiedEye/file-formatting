@@ -18,7 +18,9 @@ export class CreateGrantDto {
 
   @ApiPropertyOptional({
     type: [String],
-    description: 'Subset of the permission actions. Omit/empty = all actions.',
+    description:
+      'Subset of the permission actions; must be non-empty (422). ' +
+      'Omitting it on create records every action the permission has today.',
   })
   @IsOptional()
   @IsArray()

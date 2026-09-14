@@ -19,7 +19,7 @@ const LOCKOUT_MESSAGE =
  */
 export type RbacControlChange =
   | { kind: 'grant-deleted'; grantId: string }
-  | { kind: 'grant-actions'; grantId: string; actions: string[] | null }
+  | { kind: 'grant-actions'; grantId: string; actions: string[] }
   | { kind: 'role-deleted'; roleId: string };
 
 /**
@@ -96,10 +96,9 @@ export class RbacSelfLockoutService {
           ? change.actions
           : grant.actions;
 
-      // A null/empty action list means "every action of the permission".
-      return (
-        !actions || actions.length === 0 || actions.includes(RBAC_MANAGE_ACTION)
-      );
+      // A grant confers exactly the actions it names; an unset list confers
+      // nothing, so it cannot be what is keeping the actor in control.
+      return actions?.includes(RBAC_MANAGE_ACTION) ?? false;
     });
   }
 }

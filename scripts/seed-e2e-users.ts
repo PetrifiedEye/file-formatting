@@ -80,7 +80,7 @@ async function ensureGrant(
   grantRepository: ReturnType<typeof dataSource.getRepository<Grant>>,
   roleId: string,
   permissionId: string,
-  actions: string[] | null,
+  actions: string[],
 ): Promise<void> {
   const existing = await grantRepository.findOne({
     where: { roleId, permissionId },
@@ -139,7 +139,9 @@ async function seed(): Promise<void> {
       'admin',
       'Bootstrap administrator role',
     );
-    await ensureGrant(grantRepository, adminRole.id, rbacPermission.id, null);
+    await ensureGrant(grantRepository, adminRole.id, rbacPermission.id, [
+      'manage',
+    ]);
 
     const rbacManagerRole = await findOrCreateRole(
       roleRepository,

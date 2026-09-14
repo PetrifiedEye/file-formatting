@@ -187,7 +187,7 @@ describe('RBAC Access Check (e2e)', () => {
       grantRepository.create({
         roleId: grantingRole.id,
         permissionId: permission.id,
-        actions: null,
+        actions: ['read'],
       }),
     );
     await userRoleRepository.save([

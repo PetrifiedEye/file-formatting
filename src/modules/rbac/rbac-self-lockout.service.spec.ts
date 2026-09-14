@@ -38,7 +38,7 @@ describe('RbacSelfLockoutService', () => {
 
   it('blocks deleting the only grant carrying the actor rbac:manage', async () => {
     grantRepository.find.mockResolvedValue([
-      { id: 'grant-1', roleId: 'role-admin', actions: null },
+      { id: 'grant-1', roleId: 'role-admin', actions: ['manage'] },
     ]);
 
     await expect(
@@ -55,7 +55,7 @@ describe('RbacSelfLockoutService', () => {
       { roleId: 'role-ops' },
     ]);
     grantRepository.find.mockResolvedValue([
-      { id: 'grant-1', roleId: 'role-admin', actions: null },
+      { id: 'grant-1', roleId: 'role-admin', actions: ['manage'] },
       { id: 'grant-2', roleId: 'role-ops', actions: ['manage'] },
     ]);
 
@@ -69,7 +69,7 @@ describe('RbacSelfLockoutService', () => {
 
   it('blocks narrowing the actor own grant away from manage', async () => {
     grantRepository.find.mockResolvedValue([
-      { id: 'grant-1', roleId: 'role-admin', actions: null },
+      { id: 'grant-1', roleId: 'role-admin', actions: ['manage'] },
     ]);
 
     await expect(
@@ -83,7 +83,7 @@ describe('RbacSelfLockoutService', () => {
 
   it('allows narrowing a grant that keeps manage', async () => {
     grantRepository.find.mockResolvedValue([
-      { id: 'grant-1', roleId: 'role-admin', actions: null },
+      { id: 'grant-1', roleId: 'role-admin', actions: ['manage'] },
     ]);
 
     await expect(

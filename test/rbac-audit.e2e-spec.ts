@@ -149,7 +149,7 @@ describe('RBAC Audit Trail (e2e)', () => {
       grantRepository.create({
         roleId: adminRole.id,
         permissionId: rbacPermission.id,
-        actions: null,
+        actions: ['manage'],
       }),
     );
     await userRoleRepository.save(

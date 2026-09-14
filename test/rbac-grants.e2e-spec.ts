@@ -173,7 +173,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
       grantRepository.create({
         roleId: adminRole.id,
         permissionId: rbacPermission.id,
-        actions: null,
+        actions: ['manage'],
       }),
     );
     adminRbacGrantId = adminRbacGrant.id;
