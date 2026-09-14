@@ -472,7 +472,10 @@ describe('Account Deletion (e2e)', () => {
   });
 
   describe('Scenario 10 — rate limiting', () => {
-    it('rejects a resend before the cooldown elapses', async () => {
+    // This case clears the throttler first on purpose: it isolates the
+    // service-level resend cooldown from the @Throttle decorator. The case
+    // below covers the decorator; neither stands in for the other.
+    it('rejects a resend before the service cooldown elapses, with the throttler out of the way', async () => {
       await request(app.getHttpServer())
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
@@ -483,6 +486,52 @@ describe('Account Deletion (e2e)', () => {
         .post('/users/me/delete/resend')
         .set('Cookie', selfCookie)
         .expect(429);
+    });
+
+    it('enforces the @Throttle limit on DELETE /users/:userId (5 per minute)', async () => {
+      // Deleting ids that never existed is idempotent, so every call inside
+      // the limit succeeds and only the throttler can reject the last one.
+      for (let i = 0; i < 5; i++) {
+        await request(app.getHttpServer())
+          .delete(`/users/${randomUUID()}`)
+          .set('Cookie', adminCookie)
+          .expect(200)
+          .expect({ message: 'already removed' });
+      }
+
+      const throttled = await request(app.getHttpServer())
+        .delete(`/users/${randomUUID()}`)
+        .set('Cookie', adminCookie)
+        .expect(429);
+
+      expect(throttled.body.message).toMatch(/too many requests/i);
+
+      // Clearing the throttler is the only thing that changes, proving the
+      // rejection came from the decorator and not from any service-side state.
+      clearThrottler();
+      await request(app.getHttpServer())
+        .delete(`/users/${randomUUID()}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+    });
+
+    it('keeps a per-route budget: exhausting the delete route leaves the directory route usable', async () => {
+      for (let i = 0; i < 5; i++) {
+        await request(app.getHttpServer())
+          .delete(`/users/${randomUUID()}`)
+          .set('Cookie', adminCookie)
+          .expect(200);
+      }
+
+      await request(app.getHttpServer())
+        .delete(`/users/${randomUUID()}`)
+        .set('Cookie', adminCookie)
+        .expect(429);
+
+      await request(app.getHttpServer())
+        .post('/users/me/delete')
+        .set('Cookie', selfCookie)
+        .expect(202);
     });
   });
 
