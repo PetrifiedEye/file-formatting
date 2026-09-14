@@ -13,6 +13,7 @@ import { User } from '@/modules/users/entities/user.entity';
 @Entity('confirmation_challenges')
 @Index('idx_confirmation_challenges_active', ['userId'], {
   where: `"invalidated_at" IS NULL AND "consumed_at" IS NULL`,
+  unique: true,
 })
 export class ConfirmationChallenge {
   @PrimaryGeneratedColumn('uuid')
