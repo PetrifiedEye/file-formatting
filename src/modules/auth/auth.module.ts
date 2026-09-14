@@ -6,6 +6,8 @@ import { EmailModule } from '@/core/email/email.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { SettingsModule } from '@/modules/settings/settings.module';
 import { UserRole } from '@/modules/rbac/entities/user-role.entity';
+import { AccountDeletionChallenge } from '@/modules/users/entities/account-deletion-challenge.entity';
+import { EmailChangeChallenge } from '@/modules/users/entities/email-change-challenge.entity';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { ConfirmationChallenge } from './entities/confirmation-challenge.entity';
@@ -34,6 +36,10 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
       LoginAuditEvent,
       AuthSession,
       UserRole,
+      // Read-only here: a password reset invalidates these users-module
+      // challenges too, so no code issued before the reset outlives it.
+      EmailChangeChallenge,
+      AccountDeletionChallenge,
     ]),
     forwardRef(() => UsersModule),
     forwardRef(() => SettingsModule),
