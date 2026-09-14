@@ -17,6 +17,7 @@ import {
 } from './entities/rbac-audit-event.entity';
 import { Role } from './entities/role.entity';
 import { RbacAuditService } from './rbac-audit.service';
+import { RbacSelfLockoutService } from './rbac-self-lockout.service';
 
 @Injectable()
 export class RolesService {
@@ -27,6 +28,7 @@ export class RolesService {
     private readonly grantRepository: Repository<Grant>,
     private readonly accessConfigService: AccessConfigService,
     private readonly rbacAuditService: RbacAuditService,
+    private readonly selfLockoutService: RbacSelfLockoutService,
   ) {}
 
   async list(): Promise<Role[]> {
@@ -107,6 +109,13 @@ export class RolesService {
     if (!role) {
       throw new NotFoundException(`Role ${id} not found`);
     }
+
+    // Deleting a role drops every `user_roles` row for it (ON DELETE CASCADE),
+    // so an admin deleting a role they belong to can revoke their own access.
+    await this.selfLockoutService.assertRetainsControl(actorUserId, {
+      kind: 'role-deleted',
+      roleId: id,
+    });
 
     const dependentGrant = await this.grantRepository.findOne({
       where: { roleId: id },

@@ -1,4 +1,9 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -22,9 +27,25 @@ const EMPTY_SNAPSHOT: AccessSnapshot = {
   grantsByRole: new Map(),
 };
 
+const RETRY_BASE_DELAY_MS = 1_000;
+const RETRY_MAX_DELAY_MS = 30_000;
+
 @Injectable()
-export class AccessConfigService implements OnModuleInit {
+export class AccessConfigService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(AccessConfigService.name);
+
   private snapshot: AccessSnapshot = EMPTY_SNAPSHOT;
+
+  /**
+   * True while the in-memory snapshot is known not to reflect the database. A
+   * failed `reload()` used to leave the previous snapshot in place, so a
+   * committed revocation kept being honoured as a grant for as long as the
+   * process lived. Authorization now fails closed until a retry succeeds.
+   */
+  private stale = false;
+
+  private retryTimer: NodeJS.Timeout | null = null;
+  private retryDelayMs = RETRY_BASE_DELAY_MS;
 
   constructor(
     @InjectRepository(Role)
@@ -40,11 +61,19 @@ export class AccessConfigService implements OnModuleInit {
     this.snapshot = await this.buildSnapshot();
   }
 
+  onModuleDestroy(): void {
+    this.cancelRetry();
+  }
+
   hasPermission(
     roleNames: string[],
     permission: string,
     action: string,
   ): boolean {
+    if (this.stale) {
+      return false;
+    }
+
     if (!this.snapshot.permissionNames.has(permission)) {
       return false;
     }
@@ -68,12 +97,46 @@ export class AccessConfigService implements OnModuleInit {
     return false;
   }
 
+  /** Exposed for diagnostics and tests: is authorization currently failing closed? */
+  isStale(): boolean {
+    return this.stale;
+  }
+
   async reload(): Promise<void> {
     let newSnapshot: AccessSnapshot;
 
     try {
       newSnapshot = await this.buildSnapshot();
     } catch (error) {
+      // The caller's mutation has already committed, so throwing here would
+      // report a failure for work that succeeded. Instead, drop the snapshot
+      // (deny everything) and keep retrying until the database answers.
+      this.snapshot = EMPTY_SNAPSHOT;
+      this.stale = true;
+      this.logger.error(
+        `RBAC snapshot reload failed; denying all permission checks until it succeeds: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      await this.recordReloadFailure(error);
+      this.scheduleRetry();
+      return;
+    }
+
+    this.cancelRetry();
+    this.snapshot = newSnapshot;
+    this.stale = false;
+    this.retryDelayMs = RETRY_BASE_DELAY_MS;
+
+    await this.rbacAuditService.record(
+      RbacAuditEventType.CONFIG_RELOADED,
+      RbacAuditOutcome.SUCCESS,
+      { entityType: RbacAuditEntityType.CONFIG },
+    );
+  }
+
+  private async recordReloadFailure(error: unknown): Promise<void> {
+    try {
       await this.rbacAuditService.record(
         RbacAuditEventType.CONFIG_RELOAD_FAILED,
         RbacAuditOutcome.FAILURE,
@@ -82,16 +145,34 @@ export class AccessConfigService implements OnModuleInit {
           reason: error instanceof Error ? error.message : 'unknown error',
         },
       );
+    } catch {
+      // The audit table lives in the same database that just failed us; losing
+      // the row must not prevent the retry from being scheduled.
+    }
+  }
+
+  private scheduleRetry(): void {
+    if (this.retryTimer) {
       return;
     }
 
-    this.snapshot = newSnapshot;
+    const delay = this.retryDelayMs;
+    this.retryDelayMs = Math.min(delay * 2, RETRY_MAX_DELAY_MS);
 
-    await this.rbacAuditService.record(
-      RbacAuditEventType.CONFIG_RELOADED,
-      RbacAuditOutcome.SUCCESS,
-      { entityType: RbacAuditEntityType.CONFIG },
-    );
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.reload();
+    }, delay);
+
+    // A pending retry must not hold the process (or a test runner) open.
+    this.retryTimer.unref?.();
+  }
+
+  private cancelRetry(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
   }
 
   private async buildSnapshot(): Promise<AccessSnapshot> {

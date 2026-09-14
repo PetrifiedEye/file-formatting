@@ -17,6 +17,7 @@ import { Permission } from './entities/permission.entity';
 import { Role } from './entities/role.entity';
 import { GrantsService } from './grants.service';
 import { RbacAuditService } from './rbac-audit.service';
+import { RbacSelfLockoutService } from './rbac-self-lockout.service';
 
 describe('GrantsService', () => {
   let service: GrantsService;
@@ -48,6 +49,9 @@ describe('GrantsService', () => {
     reload: jest.fn().mockResolvedValue(undefined),
   };
   const rbacAuditService = { record: jest.fn().mockResolvedValue(undefined) };
+  const selfLockoutService = {
+    assertRetainsControl: jest.fn().mockResolvedValue(undefined),
+  };
 
   const role: Role = {
     id: 'role-1',
@@ -79,6 +83,7 @@ describe('GrantsService', () => {
         },
         { provide: AccessConfigService, useValue: accessConfigService },
         { provide: RbacAuditService, useValue: rbacAuditService },
+        { provide: RbacSelfLockoutService, useValue: selfLockoutService },
       ],
     }).compile();
 
@@ -195,5 +200,55 @@ describe('GrantsService', () => {
     await expect(service.delete('missing')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('refuses a delete that would strip the actor own rbac access', async () => {
+    grantRepository.findOne.mockResolvedValue({ id: 'grant-1' });
+    selfLockoutService.assertRetainsControl.mockRejectedValueOnce(
+      new ConflictException('would lock you out'),
+    );
+
+    await expect(service.delete('grant-1', 'admin-1')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(grantRepository.delete).not.toHaveBeenCalled();
+  });
+
+  it('checks the lockout guard against the narrowed action set on update', async () => {
+    grantRepository.findOne.mockResolvedValue({
+      id: 'grant-1',
+      permissionId: permission.id,
+      actions: null,
+    });
+    permissionRepository.findOne.mockResolvedValue(permission);
+
+    await service.update('grant-1', { actions: ['read'] }, 'admin-1');
+
+    expect(selfLockoutService.assertRetainsControl).toHaveBeenCalledWith(
+      'admin-1',
+      { kind: 'grant-actions', grantId: 'grant-1', actions: ['read'] },
+    );
+  });
+
+  it('publishes the new snapshot only after the write commits', async () => {
+    roleRepository.findOne.mockResolvedValue(role);
+    permissionRepository.findOne.mockResolvedValue(permission);
+    grantRepository.findOne.mockResolvedValue(null);
+
+    const order: string[] = [];
+    grantRepository.save.mockImplementationOnce((grant: Partial<Grant>) => {
+      order.push('save');
+      return Promise.resolve({ id: 'grant-1', ...grant });
+    });
+    accessConfigService.reload.mockImplementationOnce(() => {
+      order.push('reload');
+      return Promise.resolve();
+    });
+
+    await service.create({ roleId: role.id, permissionId: permission.id });
+
+    // Reloading inside the transaction would publish an uncommitted grant to
+    // the shared snapshot, where a rollback could not retract it.
+    expect(order).toEqual(['save', 'reload']);
   });
 });

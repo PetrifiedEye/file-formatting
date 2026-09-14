@@ -15,6 +15,7 @@ import { PermissionGuard } from './guards/permission.guard';
 import { PermissionsController } from './permissions.controller';
 import { PermissionsService } from './permissions.service';
 import { RbacAuditService } from './rbac-audit.service';
+import { RbacSelfLockoutService } from './rbac-self-lockout.service';
 import { RolesController } from './roles.controller';
 import { RolesService } from './roles.service';
 
@@ -32,6 +33,7 @@ const RbacEntitiesModule = TypeOrmModule.forFeature([
   providers: [
     RbacAuditService,
     AccessConfigService,
+    RbacSelfLockoutService,
     PermissionGuard,
     RolesService,
     PermissionsService,

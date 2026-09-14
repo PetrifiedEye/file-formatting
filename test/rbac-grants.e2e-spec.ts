@@ -77,6 +77,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
 
   let adminCookie: string;
   let nonAdminCookie: string;
+  let adminRbacGrantId: string;
 
   beforeAll(async () => {
     initializeTransactionalContext({ storageDriver: StorageDriver.AUTO });
@@ -161,13 +162,14 @@ describe('RBAC Grants CRUD (e2e)', () => {
         actions: ['manage'],
       }),
     );
-    await grantRepository.save(
+    const adminRbacGrant = await grantRepository.save(
       grantRepository.create({
         roleId: adminRole.id,
         permissionId: rbacPermission.id,
         actions: null,
       }),
     );
+    adminRbacGrantId = adminRbacGrant.id;
     await userRoleRepository.save(
       userRoleRepository.create({ userId: adminUser.id, roleId: adminRole.id }),
     );
@@ -302,5 +304,65 @@ describe('RBAC Grants CRUD (e2e)', () => {
       .set('Cookie', nonAdminCookie)
       .send({ roleId: role.id, permissionId: permission.id })
       .expect(403);
+  });
+
+  describe('self-lockout protection', () => {
+    it('refuses to delete the grant carrying the caller own rbac:manage', async () => {
+      await request(app.getHttpServer())
+        .delete(`/rbac/grants/${adminRbacGrantId}`)
+        .set('Cookie', adminCookie)
+        .expect(409);
+
+      // Still there, and still working.
+      expect(
+        await grantRepository.findOne({ where: { id: adminRbacGrantId } }),
+      ).not.toBeNull();
+      await request(app.getHttpServer())
+        .get('/rbac/grants')
+        .set('Cookie', adminCookie)
+        .expect(200);
+    });
+
+    it('refuses to narrow the caller own rbac grant away from manage', async () => {
+      // Widen the rbac permission so that 'read' is a legal action: the 409
+      // below then can only come from the lockout guard, not from the
+      // actions-subset check.
+      const rbacPermission = await permissionRepository.findOne({
+        where: { name: 'rbac' },
+      });
+      await permissionRepository.update(rbacPermission!.id, {
+        actions: ['manage', 'read'],
+      });
+
+      await request(app.getHttpServer())
+        .patch(`/rbac/grants/${adminRbacGrantId}`)
+        .set('Cookie', adminCookie)
+        .send({ actions: ['read'] })
+        .expect(409);
+    });
+
+    it('allows deleting a grant that is not the caller own rbac path', async () => {
+      const role = await roleRepository.save(
+        roleRepository.create({ name: `other-role-${Date.now()}` }),
+      );
+      const permission = await permissionRepository.save(
+        permissionRepository.create({
+          name: `reports-${Date.now()}`,
+          actions: ['read'],
+        }),
+      );
+      const grant = await grantRepository.save(
+        grantRepository.create({
+          roleId: role.id,
+          permissionId: permission.id,
+          actions: ['read'],
+        }),
+      );
+
+      await request(app.getHttpServer())
+        .delete(`/rbac/grants/${grant.id}`)
+        .set('Cookie', adminCookie)
+        .expect(204);
+    });
   });
 });
