@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AuthModule } from '@/modules/auth/auth.module';
+import { User } from '@/modules/users/entities/user.entity';
 
 import { AccessConfigService } from './access-config.service';
 import { Grant } from './entities/grant.entity';
@@ -16,6 +17,7 @@ import { PermissionsController } from './permissions.controller';
 import { PermissionsService } from './permissions.service';
 import { RbacAuditService } from './rbac-audit.service';
 import { RbacSelfLockoutService } from './rbac-self-lockout.service';
+import { RoleMembershipService } from './role-membership.service';
 import { RolesController } from './roles.controller';
 import { RolesService } from './roles.service';
 
@@ -25,6 +27,8 @@ const RbacEntitiesModule = TypeOrmModule.forFeature([
   Grant,
   UserRole,
   RbacAuditEvent,
+  // Read-only: membership assignment checks that the target user exists.
+  User,
 ]);
 
 @Module({
@@ -36,6 +40,7 @@ const RbacEntitiesModule = TypeOrmModule.forFeature([
     RbacSelfLockoutService,
     PermissionGuard,
     RolesService,
+    RoleMembershipService,
     PermissionsService,
     GrantsService,
   ],

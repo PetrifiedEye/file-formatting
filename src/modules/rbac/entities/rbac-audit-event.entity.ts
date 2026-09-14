@@ -20,6 +20,8 @@ export enum RbacAuditEventType {
   GRANT_CREATED = 'grant_created',
   GRANT_UPDATED = 'grant_updated',
   GRANT_DELETED = 'grant_deleted',
+  ROLE_MEMBERSHIP_GRANTED = 'role_membership_granted',
+  ROLE_MEMBERSHIP_REVOKED = 'role_membership_revoked',
   CONFIG_RELOADED = 'config_reloaded',
   CONFIG_RELOAD_FAILED = 'config_reload_failed',
   MANAGEMENT_ACCESS_DENIED = 'management_access_denied',
@@ -34,6 +36,7 @@ export enum RbacAuditEntityType {
   ROLE = 'role',
   PERMISSION = 'permission',
   GRANT = 'grant',
+  MEMBERSHIP = 'membership',
   CONFIG = 'config',
 }
 
