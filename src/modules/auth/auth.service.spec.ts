@@ -73,7 +73,6 @@ describe('AuthService', () => {
 
   const challengeService = {
     findActiveByUserId: jest.fn(),
-    findActiveByLinkTokenHash: jest.fn(),
     createChallenge: jest.fn(),
     save: jest.fn(),
   };

@@ -33,19 +33,6 @@ export class ConfirmationChallengeService {
     });
   }
 
-  async findActiveByLinkTokenHash(
-    linkTokenHash: string,
-  ): Promise<ConfirmationChallenge | null> {
-    return this.challengeRepository.findOne({
-      where: {
-        linkTokenHash,
-        invalidatedAt: IsNull(),
-        consumedAt: IsNull(),
-      },
-      relations: ['user'],
-    });
-  }
-
   async findByLinkTokenHash(
     linkTokenHash: string,
   ): Promise<ConfirmationChallenge | null> {
