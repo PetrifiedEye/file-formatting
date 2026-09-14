@@ -560,44 +560,101 @@ describe('Admin User Directory (e2e)', () => {
   });
 
   describe('Scenario 7 — deletion while paging', () => {
-    it('excludes an account deleted mid-deletion from a later page with no duplicates', async () => {
-      const directoryUsers = await seedDirectoryUsers(25);
+    it('drops a row that starts deleting between two pages', async () => {
+      await seedDirectoryUsers(25);
 
       const firstResponse = await request(app.getHttpServer())
-        .get('/users')
+        .get('/users?limit=10')
         .set('Cookie', adminCookie)
         .expect(200);
       const firstPage = firstResponse.body as DirectoryPageBody;
+      expect(firstPage.nextCursor).not.toBeNull();
 
-      const targetId = firstPage.items[0].id;
-      const target = directoryUsers.find((u) => u.id === targetId);
-      if (target) {
-        await userRepository.update(
-          { id: targetId },
-          { deletionStartedAt: new Date() },
-        );
-      } else {
-        // The first page's top row can be adminUser/readerUser (created
-        // just before the directory users); mark it mid-deletion too.
-        await userRepository.update(
-          { id: targetId },
-          { deletionStartedAt: new Date() },
-        );
-      }
+      // Look ahead at the page the cursor is about to return, and mark one of
+      // *those* rows mid-deletion. Picking a row from page 1 would prove
+      // nothing: keyset pagination never revisits it either way.
+      const previewResponse = await request(app.getHttpServer())
+        .get(
+          `/users?limit=10&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
+        )
+        .set('Cookie', adminCookie)
+        .expect(200);
+      const preview = previewResponse.body as DirectoryPageBody;
+      expect(preview.items.length).toBeGreaterThan(1);
+
+      const targetId = preview.items[0].id;
+      await userRepository.update(
+        { id: targetId },
+        { deletionStartedAt: new Date() },
+      );
 
       const secondResponse = await request(app.getHttpServer())
-        .get(`/users?cursor=${encodeURIComponent(firstPage.nextCursor!)}`)
+        .get(
+          `/users?limit=10&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
+        )
         .set('Cookie', adminCookie)
         .expect(200);
       const secondPage = secondResponse.body as DirectoryPageBody;
 
-      const firstIds = firstPage.items.map((i) => i.id);
-      const secondIds = secondPage.items.map((i) => i.id);
+      expect(preview.items.map((i) => i.id)).toContain(targetId);
+      expect(secondPage.items.map((i) => i.id)).not.toContain(targetId);
 
-      expect(secondIds).not.toContain(targetId);
-      expect(secondIds.some((id) => firstIds.includes(id))).toBe(false);
+      const firstIds = firstPage.items.map((i) => i.id);
+      expect(secondPage.items.some((item) => firstIds.includes(item.id))).toBe(
+        false,
+      );
+    });
+
+    it('hides mid-deletion rows from the very first page too', async () => {
+      const directoryUsers = await seedDirectoryUsers(5);
+
+      const beforeResponse = await request(app.getHttpServer())
+        .get('/users?limit=50')
+        .set('Cookie', adminCookie)
+        .expect(200);
+      const before = beforeResponse.body as DirectoryPageBody;
+
+      const targetId = directoryUsers[0].id;
+      expect(before.items.map((i) => i.id)).toContain(targetId);
+
+      await userRepository.update(
+        { id: targetId },
+        { deletionStartedAt: new Date() },
+      );
+
+      const afterResponse = await request(app.getHttpServer())
+        .get('/users?limit=50')
+        .set('Cookie', adminCookie)
+        .expect(200);
+      const after = afterResponse.body as DirectoryPageBody;
+
+      expect(after.items.map((i) => i.id)).not.toContain(targetId);
+      expect(after.items).toHaveLength(before.items.length - 1);
+    });
+
+    it('does not surface a mid-deletion row through search or by id', async () => {
+      const directoryUsers = await seedDirectoryUsers(3);
+      const target = directoryUsers[0];
+
+      await userRepository.update(
+        { id: target.id },
+        { deletionStartedAt: new Date() },
+      );
+
+      const byEmail = await request(app.getHttpServer())
+        .get(`/users?search=${encodeURIComponent(target.email)}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+      expect((byEmail.body as DirectoryPageBody).items).toHaveLength(0);
+
+      const byId = await request(app.getHttpServer())
+        .get(`/users?search=${target.id}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+      expect((byId.body as DirectoryPageBody).items).toHaveLength(0);
     });
   });
+
   describe('Sub-millisecond createdAt pagination (regression)', () => {
     // Rows created by `now()`/`clock_timestamp()` carry microseconds, which the
     // pg driver drops when it materialises a JS Date. A cursor built from that
