@@ -11,6 +11,11 @@ import { UserStatus } from '@/modules/users/entities/user.entity';
 import { UsersService } from '@/modules/users/users.service';
 import { SettingsService } from '@/modules/settings/settings.service';
 
+import { AccountDeletionChallenge } from '@/modules/users/entities/account-deletion-challenge.entity';
+import { EmailChangeChallenge } from '@/modules/users/entities/email-change-challenge.entity';
+
+import { ConfirmationChallenge } from './entities/confirmation-challenge.entity';
+import { LoginChallenge } from './entities/login-challenge.entity';
 import { PasswordResetChallenge } from './entities/password-reset-challenge.entity';
 import { PasswordResetService } from './password-reset.service';
 import { LoginAuditService } from './login-audit.service';
@@ -40,6 +45,15 @@ describe('PasswordResetService', () => {
       Promise.resolve({ id: 'challenge-1', ...c }),
     ),
   };
+
+  /** The other challenge tables a reset has to sweep. */
+  const otherChallengeRepository = (): { update: jest.Mock } => ({
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
+  });
+  const loginChallengeRepository = otherChallengeRepository();
+  const confirmationChallengeRepository = otherChallengeRepository();
+  const emailChangeChallengeRepository = otherChallengeRepository();
+  const accountDeletionChallengeRepository = otherChallengeRepository();
 
   const usersService = {
     findByNormalizedEmail: jest.fn(),
@@ -80,6 +94,22 @@ describe('PasswordResetService', () => {
         {
           provide: getRepositoryToken(PasswordResetChallenge),
           useValue: challengeRepository,
+        },
+        {
+          provide: getRepositoryToken(LoginChallenge),
+          useValue: loginChallengeRepository,
+        },
+        {
+          provide: getRepositoryToken(ConfirmationChallenge),
+          useValue: confirmationChallengeRepository,
+        },
+        {
+          provide: getRepositoryToken(EmailChangeChallenge),
+          useValue: emailChangeChallengeRepository,
+        },
+        {
+          provide: getRepositoryToken(AccountDeletionChallenge),
+          useValue: accountDeletionChallengeRepository,
         },
         { provide: UsersService, useValue: usersService },
         { provide: SettingsService, useValue: settingsService },
@@ -164,12 +194,67 @@ describe('PasswordResetService', () => {
         'user-1',
         SessionRevocationReason.PASSWORD_RESET,
       );
+
+      // Nor a code already in the attacker's hands for some *other* flow: an
+      // email change or an account deletion held from before the reset could
+      // still be redeemed afterwards.
+      for (const repository of [
+        loginChallengeRepository,
+        confirmationChallengeRepository,
+        emailChangeChallengeRepository,
+        accountDeletionChallengeRepository,
+      ]) {
+        const [where, patch] = repository.update.mock.calls[0] as [
+          { userId: string },
+          { invalidatedAt: Date },
+        ];
+        expect(where.userId).toBe('user-1');
+        expect(patch.invalidatedAt).toBeInstanceOf(Date);
+      }
+    });
+
+    it('does not report password policy errors before the code is verified', async () => {
+      usersService.findByNormalizedEmail.mockResolvedValue({
+        id: 'user-1',
+        email: 'user@example.com',
+      });
+      challengeRepository.findOne.mockResolvedValue(null);
+
+      // Policy errors used to be raised before the challenge was looked at, so
+      // a weak password told the caller whether the address was registered:
+      // a detailed error list for a known email, the generic message for an
+      // unknown one.
+      let error: unknown;
+      try {
+        await service.confirmReset(
+          { email: 'user@example.com', code: '123456', newPassword: 'short' },
+          {},
+        );
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toMatchObject({
+        message:
+          'Unable to reset password. Please check your code or request a new one.',
+      });
     });
 
     it('rejects a weak new password without touching the challenge', async () => {
       usersService.findByNormalizedEmail.mockResolvedValue({
         id: 'user-1',
         email: 'user@example.com',
+      });
+      challengeRepository.findOne.mockResolvedValue({
+        id: 'challenge-1',
+        userId: 'user-1',
+        otpHash: hashSecret('123456'),
+        linkTokenHash: hashSecret('link-token'),
+        expiresAt: new Date(Date.now() + 60000),
+        attemptsRemaining: 5,
+        invalidatedAt: null,
+        consumedAt: null,
       });
 
       await expect(

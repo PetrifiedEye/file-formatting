@@ -8,6 +8,11 @@ import { UsersService } from '@/modules/users/users.service';
 import { SettingsService } from '@/modules/settings/settings.service';
 import { validatePassword } from '@/modules/settings/password-policy.validator';
 
+import { AccountDeletionChallenge } from '@/modules/users/entities/account-deletion-challenge.entity';
+import { EmailChangeChallenge } from '@/modules/users/entities/email-change-challenge.entity';
+
+import { ConfirmationChallenge } from './entities/confirmation-challenge.entity';
+import { LoginChallenge } from './entities/login-challenge.entity';
 import { PasswordResetChallenge } from './entities/password-reset-challenge.entity';
 import {
   LoginAuditEventType,
@@ -43,6 +48,14 @@ export class PasswordResetService {
   constructor(
     @InjectRepository(PasswordResetChallenge)
     private readonly challengeRepository: Repository<PasswordResetChallenge>,
+    @InjectRepository(LoginChallenge)
+    private readonly loginChallengeRepository: Repository<LoginChallenge>,
+    @InjectRepository(ConfirmationChallenge)
+    private readonly confirmationChallengeRepository: Repository<ConfirmationChallenge>,
+    @InjectRepository(EmailChangeChallenge)
+    private readonly emailChangeChallengeRepository: Repository<EmailChangeChallenge>,
+    @InjectRepository(AccountDeletionChallenge)
+    private readonly accountDeletionChallengeRepository: Repository<AccountDeletionChallenge>,
     private readonly usersService: UsersService,
     private readonly settingsService: SettingsService,
     private readonly confirmationMailService: ConfirmationMailService,
@@ -118,18 +131,6 @@ export class PasswordResetService {
       throw new BadRequestException(GENERIC_CONFIRM_FAILURE);
     }
 
-    const settings = await this.settingsService.getSettings();
-    const passwordResult = validatePassword(dto.newPassword, settings);
-    if (!passwordResult.valid) {
-      await this.recordFailure(
-        normalizedEmail,
-        user.id,
-        meta,
-        'invalid_password',
-      );
-      throw new BadRequestException(passwordResult.errors);
-    }
-
     const challenge = await this.findActiveByUserId(user.id);
 
     if (!challenge || this.isExpired(challenge.expiresAt)) {
@@ -156,6 +157,23 @@ export class PasswordResetService {
       await this.challengeRepository.save(challenge);
       await this.recordFailure(normalizedEmail, user.id, meta, 'wrong_code');
       throw new BadRequestException(GENERIC_CONFIRM_FAILURE);
+    }
+
+    // Only now, with the code proven, is it safe to say anything specific.
+    // Reporting policy errors earlier made the response shape an enumeration
+    // oracle: a registered address got a detailed list of policy violations
+    // while an unknown one got the generic failure, so any weak password
+    // revealed whether an address was registered.
+    const settings = await this.settingsService.getSettings();
+    const passwordResult = validatePassword(dto.newPassword, settings);
+    if (!passwordResult.valid) {
+      await this.recordFailure(
+        normalizedEmail,
+        user.id,
+        meta,
+        'invalid_password',
+      );
+      throw new BadRequestException(passwordResult.errors);
     }
 
     const passwordHash = await hashPassword(dto.newPassword);
@@ -194,6 +212,25 @@ export class PasswordResetService {
       user.id,
       SessionRevocationReason.PASSWORD_RESET,
     );
+    await this.invalidateOtherChallenges(user.id);
+  }
+
+  /**
+   * A reset is the remedy for a compromised account, so it has to end every
+   * code already in flight — not only the sessions. An attacker who held a
+   * `email_change` or `account_deletion` code from before the reset could
+   * otherwise still redeem it afterwards and take the account back.
+   */
+  private async invalidateOtherChallenges(userId: string): Promise<void> {
+    const invalidatedAt = new Date();
+    const active = { userId, invalidatedAt: IsNull(), consumedAt: IsNull() };
+
+    await Promise.all([
+      this.loginChallengeRepository.update(active, { invalidatedAt }),
+      this.confirmationChallengeRepository.update(active, { invalidatedAt }),
+      this.emailChangeChallengeRepository.update(active, { invalidatedAt }),
+      this.accountDeletionChallengeRepository.update(active, { invalidatedAt }),
+    ]);
   }
 
   async exchangeLinkToken(token: string): Promise<ExchangedLinkToken> {
