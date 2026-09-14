@@ -28,8 +28,6 @@ interface EffectiveOptions {
 
 interface CursorPayload {
   v: number;
-  sort: string;
-  dir: string;
   fp: string;
   id: string;
   createdAt?: string;
@@ -109,7 +107,6 @@ export class UserDirectoryService {
         ? this.encodeCursor(
             pageRows[pageRows.length - 1],
             options.sort,
-            options.direction,
             fingerprint,
           )
         : null;
@@ -262,13 +259,10 @@ export class UserDirectoryService {
   private encodeCursor(
     lastRow: User,
     sort: UserDirectorySortField,
-    direction: UserDirectorySortDirection,
     fingerprint: string,
   ): string {
     const payload: CursorPayload = {
       v: CURSOR_VERSION,
-      sort,
-      dir: direction,
       fp: fingerprint,
       id: lastRow.id,
     };
