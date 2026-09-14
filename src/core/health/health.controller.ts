@@ -14,7 +14,9 @@ export class HealthController {
   @Get()
   @HealthCheck()
   async check() {
-    const healthCheckEnabled = this.configService.get('HEALTH_CHECK_ENABLED');
+    const healthCheckEnabled = this.configService.getBoolean(
+      'HEALTH_CHECK_ENABLED',
+    );
 
     if (!healthCheckEnabled) {
       return this.healthService.getEmptyResponse();
