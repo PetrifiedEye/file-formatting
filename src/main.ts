@@ -1,9 +1,11 @@
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   FastifyAdapter,
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import compression from '@fastify/compress';
+import helmet from '@fastify/helmet';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -16,58 +18,12 @@ import {
 } from 'typeorm-transactional';
 
 import { AppModule } from './core/app/app.module';
+import {
+  parseTrustProxy,
+  resolveCorsOrigins,
+  SHUTDOWN_DRAIN_TIMEOUT_MS,
+} from '@/core/bootstrap/bootstrap.options';
 import { ConfigService } from '@/core/config/config.service';
-
-const DEFAULT_CORS_ORIGINS = [
-  'http://localhost:5174',
-  'http://localhost:4200',
-  'http://localhost:8080',
-];
-
-function parseCorsOrigins(raw: string | undefined): string[] {
-  if (!raw || raw.trim() === '') {
-    return DEFAULT_CORS_ORIGINS;
-  }
-
-  return raw
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-}
-
-/**
- * Fastify only honours `X-Forwarded-*` when `trustProxy` is set, and it has to
- * be set on the adapter (before the app exists), so it is read straight from
- * the environment rather than through `ConfigService`.
- *
- * Without it every request behind a reverse proxy reports the proxy's address:
- * `@Throttle` buckets all clients together and audit rows record one IP.
- *
- * Accepted values: `false` (default, direct exposure), `true` (trust the whole
- * chain), a hop count (`1` = one proxy in front), or a comma-separated list of
- * trusted proxy addresses/CIDRs.
- */
-function parseTrustProxy(raw: string | undefined): boolean | number | string[] {
-  const value = raw?.trim();
-
-  if (!value || value === 'false') {
-    return false;
-  }
-
-  if (value === 'true') {
-    return true;
-  }
-
-  const hops = Number(value);
-  if (Number.isInteger(hops) && hops > 0) {
-    return hops;
-  }
-
-  return value
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
 
 async function bootstrap() {
   initializeTransactionalContext({ storageDriver: StorageDriver.AUTO });
@@ -76,10 +32,46 @@ async function bootstrap() {
     AppModule,
     new FastifyAdapter({
       trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+      // On shutdown, close idle keep-alive sockets at once but let requests
+      // already in flight finish, instead of severing them. Stated explicitly
+      // rather than inherited, because it is what makes a rolling deploy
+      // drain cleanly.
+      forceCloseConnections: 'idle',
     }),
   );
 
+  const logger = new Logger('Bootstrap');
+  const configService = app.get(ConfigService);
+
   await app.register(compression);
+
+  // Responses carry no security headers at all today, and user-uploaded files
+  // are served from `assets/` on this same origin — so a file the browser
+  // sniffs as HTML runs as same-origin script. Helmet supplies the standard
+  // set: nosniff, frame-ancestors, referrer policy, HSTS.
+  await app.register(helmet, {
+    // The API serves JSON and static assets, never a document that loads its
+    // own scripts or styles, so the default CSP is locked down further: no
+    // subresource of any kind, and no framing.
+    contentSecurityPolicy: {
+      directives: {
+        'default-src': ["'none'"],
+        // Same-origin only, and only what the dev Swagger page needs: its own
+        // bundle, its own stylesheet, and the XHRs its "Try it out" makes.
+        'script-src': ["'self'"],
+        'style-src': ["'self'", "'unsafe-inline'"],
+        'img-src': ["'self'", 'data:'],
+        'connect-src': ["'self'"],
+        'frame-ancestors': ["'none'"],
+        'base-uri': ["'none'"],
+        'form-action': ["'none'"],
+      },
+    },
+    crossOriginResourcePolicy: { policy: 'same-site' },
+    // HSTS is meaningless (and misleading) when the app is reachable over
+    // plain HTTP in development.
+    hsts: configService.get('NODE_ENV') === 'production',
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -87,11 +79,17 @@ async function bootstrap() {
     }),
   );
 
-  const configService = app.get(ConfigService);
-  const corsOrigins = parseCorsOrigins(configService.get('CORS_ORIGINS'));
+  const cors = resolveCorsOrigins(
+    configService.get('CORS_ORIGINS'),
+    configService.get('NODE_ENV'),
+  );
+
+  if (cors.warning) {
+    logger.warn(cors.warning);
+  }
 
   app.enableCors({
-    origin: corsOrigins,
+    origin: cors.origins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
     preflightContinue: false,
@@ -128,6 +126,23 @@ async function bootstrap() {
   }
 
   app.enableShutdownHooks();
+
+  // `enableShutdownHooks` runs the Nest lifecycle on SIGTERM, and
+  // `forceCloseConnections: 'idle'` above drains the in-flight requests. What
+  // was missing is a bound on that drain: one request stuck on a slow query
+  // could keep the process alive past the orchestrator's grace period, which
+  // then turns a clean stop into a SIGKILL mid-write.
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(signal, () => {
+      const forceExit = setTimeout(() => {
+        logger.error(
+          `Shutdown did not finish within ${SHUTDOWN_DRAIN_TIMEOUT_MS}ms; exiting.`,
+        );
+        process.exit(1);
+      }, SHUTDOWN_DRAIN_TIMEOUT_MS);
+      forceExit.unref();
+    });
+  }
 
   const port = configService.get('PORT');
 
