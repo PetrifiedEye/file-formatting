@@ -769,10 +769,9 @@ export class AuthService {
       }
     }
 
-    const now = new Date();
-    await this.enforceEmailCap(normalizedEmail, now);
-
-    await this.sendConfirmationEmail(user, normalizedEmail, meta, now);
+    // The cap is enforced inside `sendConfirmationEmail`, which every send
+    // path goes through.
+    await this.sendConfirmationEmail(user, normalizedEmail, meta, new Date());
 
     return { message: RESEND_MESSAGE };
   }
@@ -796,9 +795,7 @@ export class AuthService {
       }
     }
 
-    const now = new Date();
-    await this.enforceEmailCap(normalizedEmail, now);
-    await this.sendConfirmationEmail(user, normalizedEmail, meta, now);
+    await this.sendConfirmationEmail(user, normalizedEmail, meta, new Date());
 
     await this.auditService.record(
       RegistrationAuditEventType.REGISTRATION_ATTEMPT,
