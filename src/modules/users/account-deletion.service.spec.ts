@@ -206,8 +206,7 @@ describe('AccountDeletionService', () => {
       const challenge = activeChallenge();
       challengeRepository.findOne.mockResolvedValueOnce(challenge);
       usersRepository.manager.query.mockResolvedValueOnce([
-        [{ photoUrl: 'https://assets.example.com/assets/photos/a.jpg' }],
-        1,
+        { deletionStartedAt: null },
       ]);
       usersService.toRelativeAssetPath.mockReturnValueOnce('photos/a.jpg');
       usersRepository.findOneOrFail.mockResolvedValueOnce({
@@ -275,11 +274,12 @@ describe('AccountDeletionService', () => {
       );
     });
 
-    it('rejects with 409 when the row is already claimed by a concurrent deletion', async () => {
+    it('rejects with 409 when the row is already flagged mid-deletion', async () => {
       const challenge = activeChallenge();
       challengeRepository.findOne.mockResolvedValueOnce(challenge);
-      usersRepository.manager.query.mockResolvedValueOnce([[], 0]);
-      usersRepository.findOne.mockResolvedValueOnce({ id: caller.id });
+      usersRepository.manager.query.mockResolvedValueOnce([
+        { deletionStartedAt: new Date() },
+      ]);
 
       await expect(service.confirmSelfDelete(caller, '123456')).rejects.toThrow(
         ConflictException,
@@ -297,8 +297,7 @@ describe('AccountDeletionService', () => {
   describe('adminDelete', () => {
     it('claims and deletes the target, including its photo file', async () => {
       usersRepository.manager.query.mockResolvedValueOnce([
-        [{ photoUrl: 'https://assets.example.com/assets/photos/b.jpg' }],
-        1,
+        { deletionStartedAt: null },
       ]);
       usersService.toRelativeAssetPath.mockReturnValueOnce('photos/b.jpg');
       usersRepository.findOneOrFail.mockResolvedValueOnce({
@@ -314,8 +313,7 @@ describe('AccountDeletionService', () => {
     });
 
     it('returns an idempotent already-removed result for a target with no matching row', async () => {
-      usersRepository.manager.query.mockResolvedValueOnce([[], 0]);
-      usersRepository.findOne.mockResolvedValueOnce(null);
+      usersRepository.manager.query.mockResolvedValueOnce([]);
 
       const result = await service.adminDelete('never-existed');
 
@@ -327,8 +325,9 @@ describe('AccountDeletionService', () => {
     });
 
     it('rejects with 409 when the target is already mid-deletion', async () => {
-      usersRepository.manager.query.mockResolvedValueOnce([[], 0]);
-      usersRepository.findOne.mockResolvedValueOnce({ id: 'target-1' });
+      usersRepository.manager.query.mockResolvedValueOnce([
+        { deletionStartedAt: new Date() },
+      ]);
 
       await expect(service.adminDelete('target-1')).rejects.toThrow(
         ConflictException,
