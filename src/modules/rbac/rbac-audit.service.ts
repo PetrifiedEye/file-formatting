@@ -31,22 +31,36 @@ export class RbacAuditService {
     outcome: RbacAuditOutcome,
     context: RbacAuditContext = {},
   ): Promise<void> {
-    const event = this.auditRepository.create({
-      eventType,
-      outcome,
-      actorUserId: context.actorUserId ?? null,
-      entityType: context.entityType ?? null,
-      entityId: context.entityId ?? null,
-      reason: context.reason ?? null,
-      metadata: context.metadata ?? {},
-    });
+    // Best-effort, like every other audit service in the codebase. This one
+    // used to propagate, and `PermissionGuard` records *every* permission
+    // denial: a database hiccup on the audit insert turned a 403 into a 500,
+    // letting the audit trail decide the caller's response. The write is
+    // logged when it fails so the gap is still visible in the logs.
+    try {
+      const event = this.auditRepository.create({
+        eventType,
+        outcome,
+        actorUserId: context.actorUserId ?? null,
+        entityType: context.entityType ?? null,
+        entityId: context.entityId ?? null,
+        reason: context.reason ?? null,
+        metadata: context.metadata ?? {},
+      });
 
-    await this.auditRepository.save(event);
+      await this.auditRepository.save(event);
 
-    this.logger.log(
-      `${eventType} ${outcome}${
-        context.entityId ? ` for ${context.entityType} ${context.entityId}` : ''
-      }${context.reason ? ` (${context.reason})` : ''}`,
-    );
+      this.logger.log(
+        `${eventType} ${outcome}${
+          context.entityId
+            ? ` for ${context.entityType} ${context.entityId}`
+            : ''
+        }${context.reason ? ` (${context.reason})` : ''}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to record RBAC audit event ${eventType} ${outcome}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 }
