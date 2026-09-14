@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -10,6 +11,7 @@ import { AccessConfigService } from './access-config.service';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { Grant } from './entities/grant.entity';
+import { UserRole } from './entities/user-role.entity';
 import {
   RbacAuditEntityType,
   RbacAuditEventType,
@@ -21,11 +23,15 @@ import { RbacSelfLockoutService } from './rbac-self-lockout.service';
 
 @Injectable()
 export class RolesService {
+  private readonly logger = new Logger(RolesService.name);
+
   constructor(
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
     @InjectRepository(Grant)
     private readonly grantRepository: Repository<Grant>,
+    @InjectRepository(UserRole)
+    private readonly userRoleRepository: Repository<UserRole>,
     private readonly accessConfigService: AccessConfigService,
     private readonly rbacAuditService: RbacAuditService,
     private readonly selfLockoutService: RbacSelfLockoutService,
@@ -126,6 +132,20 @@ export class RolesService {
       );
     }
 
+    // The cascade is silent: the members lose the role and nothing in the
+    // audit trail says how many, or who. Count them first so the row records
+    // the real blast radius of the delete, and name them while they are still
+    // there to be named.
+    const memberships = await this.userRoleRepository.find({
+      where: { roleId: id },
+    });
+
+    if (memberships.length > 0) {
+      this.logger.warn(
+        `Deleting role "${role.name}" (${id}) removes it from ${memberships.length} user(s)`,
+      );
+    }
+
     await this.roleRepository.delete(id);
 
     await this.accessConfigService.reload();
@@ -136,6 +156,11 @@ export class RolesService {
         actorUserId,
         entityType: RbacAuditEntityType.ROLE,
         entityId: id,
+        metadata: {
+          roleName: role.name,
+          membershipsRemoved: memberships.length,
+          memberUserIds: memberships.map((membership) => membership.userId),
+        },
       },
     );
   }
