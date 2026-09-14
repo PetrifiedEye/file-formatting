@@ -206,25 +206,36 @@ export class AccountDeletionService {
     return { message: 'deleted', outcome: 'deleted' };
   }
 
+  /**
+   * The claim used to be written as `UPDATE users SET deletion_started_at =
+   * now() ... RETURNING`, in the same transaction that then deletes the row.
+   * That write could never be observed: by the time the transaction committed
+   * the row was gone, so no other transaction ever saw a "mid-deletion"
+   * account, and the staging it implied did not exist.
+   *
+   * What actually serializes two concurrent deletions is the row lock, so the
+   * lock is now taken explicitly and the misleading write is gone.
+   * `deletion_started_at` keeps its real meaning — an account an operator has
+   * flagged as being torn down, which the admin directory already hides and
+   * which this method still refuses to delete out from under.
+   */
   @Transactional()
   private async claimAndDelete(
     userId: string,
     challenge?: AccountDeletionChallenge,
   ): Promise<ClaimResult> {
-    const [claimed]: [Array<{ photoUrl: string | null }>, number] =
+    const locked: Array<{ deletionStartedAt: Date | null }> =
       await this.usersRepository.manager.query(
-        `UPDATE users SET deletion_started_at = now() WHERE id = $1 AND deletion_started_at IS NULL RETURNING photo_url AS "photoUrl"`,
+        `SELECT deletion_started_at AS "deletionStartedAt" FROM users WHERE id = $1 FOR UPDATE`,
         [userId],
       );
 
-    if (claimed.length === 0) {
-      const existing = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      return {
-        outcome: existing ? 'conflict' : 'not_found',
-        relativeAssetPath: null,
-      };
+    if (locked.length === 0) {
+      return { outcome: 'not_found', relativeAssetPath: null };
+    }
+
+    if (locked[0].deletionStartedAt !== null) {
+      return { outcome: 'conflict', relativeAssetPath: null };
     }
 
     if (challenge) {
