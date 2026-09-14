@@ -229,6 +229,100 @@ describe('RBAC Roles CRUD (e2e)', () => {
       .expect(204);
   });
 
+  it('strips the role from every member when it is deleted', async () => {
+    const passwordHash = await hashPassword(TEST_PASSWORD);
+    const roleName = `doomed-${Date.now()}-${Math.random()}`;
+    const role = await roleRepository.save(
+      roleRepository.create({ name: roleName }),
+    );
+    // The `rbac` permission is already seeded for the admin in beforeEach.
+    const permission = await permissionRepository.findOneOrFail({
+      where: { name: 'rbac' },
+    });
+    const grant = await grantRepository.save(
+      grantRepository.create({
+        roleId: role.id,
+        permissionId: permission.id,
+        actions: ['manage'],
+      }),
+    );
+
+    const members: User[] = [];
+    for (let i = 0; i < 3; i++) {
+      const member = await userRepository.save(
+        userRepository.create({
+          email: `member-${i}-${Date.now()}-${Math.random()}@example.com`,
+          passwordHash,
+          status: UserStatus.ACTIVE,
+          confirmedAt: new Date(),
+        }),
+      );
+      await userRoleRepository.save(
+        userRoleRepository.create({ userId: member.id, roleId: role.id }),
+      );
+      members.push(member);
+    }
+    await accessConfigService.reload();
+
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: members[0].email, password: TEST_PASSWORD })
+      .expect(200);
+    const memberCookie = extractSessionCookie(
+      login.headers['set-cookie'] as unknown as string[],
+    );
+
+    const sessionBefore = await request(app.getHttpServer())
+      .get('/auth/session')
+      .set('Cookie', memberCookie)
+      .expect(200);
+    expect(sessionBefore.body.roles).toContain(roleName);
+
+    // The role carries real access while its grant stands.
+    await request(app.getHttpServer())
+      .get('/rbac/roles')
+      .set('Cookie', memberCookie)
+      .expect(200);
+
+    // A role referenced by a grant cannot be deleted (ON DELETE RESTRICT), so
+    // the grant goes first — and that alone is what costs the member access.
+    await request(app.getHttpServer())
+      .delete(`/rbac/grants/${grant.id}`)
+      .set('Cookie', adminCookie)
+      .expect(204);
+
+    await request(app.getHttpServer())
+      .get('/rbac/roles')
+      .set('Cookie', memberCookie)
+      .expect(403);
+
+    expect(await userRoleRepository.countBy({ roleId: role.id })).toBe(3);
+
+    await request(app.getHttpServer())
+      .delete(`/rbac/roles/${role.id}`)
+      .set('Cookie', adminCookie)
+      .expect(204);
+
+    // Deleting the role cascades through user_roles: every membership goes,
+    // silently and without any per-user call.
+    expect(await userRoleRepository.countBy({ roleId: role.id })).toBe(0);
+    for (const member of members) {
+      expect(await userRoleRepository.countBy({ userId: member.id })).toBe(0);
+    }
+
+    // The members themselves survive; only the membership is gone.
+    for (const member of members) {
+      expect(await userRepository.countBy({ id: member.id })).toBe(1);
+    }
+
+    const sessionAfter = await request(app.getHttpServer())
+      .get('/auth/session')
+      .set('Cookie', memberCookie)
+      .expect(200);
+    expect(sessionAfter.body.roles).not.toContain(roleName);
+    expect(sessionAfter.body.roles).toEqual([]);
+  });
+
   it('denies role management for a non-admin with 403', async () => {
     await request(app.getHttpServer())
       .post('/rbac/roles')
