@@ -130,10 +130,16 @@ function evalAtom(
   if ((m = trimmed.match(/^([\w.]+) IS NULL$/))) {
     return getField(row, m[1]) === null || getField(row, m[1]) === undefined;
   }
-  if ((m = trimmed.match(/^([\w.]+) ILIKE (:\w+) ESCAPE (:\w+)$/))) {
-    const value = getField(row, m[1]) as string;
-    const pattern = resolveParam(m[2], params) as string;
-    const escapeChar = resolveParam(m[3], params) as string;
+  // The citext column is cast to text so the trigram index applies; the cast
+  // is transparent to the comparison this evaluator models.
+  if (
+    (m = trimmed.match(
+      /^(?:CAST\(([\w.]+) AS text\)|([\w.]+)) ILIKE (:\w+) ESCAPE (:\w+)$/,
+    ))
+  ) {
+    const value = getField(row, m[1] ?? m[2]) as string;
+    const pattern = resolveParam(m[3], params) as string;
+    const escapeChar = resolveParam(m[4], params) as string;
     return likeToRegex(pattern, escapeChar).test(value ?? '');
   }
   if ((m = trimmed.match(/^([\w.]+) (<|>|=) (:\w+)$/))) {

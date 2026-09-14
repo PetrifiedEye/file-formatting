@@ -124,16 +124,22 @@ export class UserDirectoryService {
 
     const escaped = escapeLikeTerm(search);
 
+    // Cast to text so the trigram index (`idx_users_directory_email_trgm`) can
+    // serve the leading-wildcard match: pg_trgm has no citext operator class,
+    // and against citext the planner had no usable plan and scanned every row.
+    // ILIKE on text is case-insensitive too, so the results are unchanged.
+    // Spelled `CAST(... AS text)` because `user.email::text` confuses the query
+    // builder's alias resolution.
     if (isUUID(search)) {
       qb.andWhere(
-        '(user.email ILIKE :searchTerm ESCAPE :escapeChar OR user.id = :searchId)',
+        '(CAST(user.email AS text) ILIKE :searchTerm ESCAPE :escapeChar OR user.id = :searchId)',
         { searchTerm: `%${escaped}%`, escapeChar: '\\', searchId: search },
       );
     } else {
-      qb.andWhere('user.email ILIKE :searchTerm ESCAPE :escapeChar', {
-        searchTerm: `%${escaped}%`,
-        escapeChar: '\\',
-      });
+      qb.andWhere(
+        'CAST(user.email AS text) ILIKE :searchTerm ESCAPE :escapeChar',
+        { searchTerm: `%${escaped}%`, escapeChar: '\\' },
+      );
     }
   }
 
