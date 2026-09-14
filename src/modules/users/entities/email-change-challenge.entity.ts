@@ -13,6 +13,7 @@ import { User } from '@/modules/users/entities/user.entity';
 @Entity('email_change_challenges')
 @Index('idx_email_change_challenges_active', ['userId'], {
   where: `"invalidated_at" IS NULL AND "consumed_at" IS NULL`,
+  unique: true,
 })
 export class EmailChangeChallenge {
   @PrimaryGeneratedColumn('uuid')

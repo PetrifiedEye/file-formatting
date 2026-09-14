@@ -13,6 +13,7 @@ import { User } from '@/modules/users/entities/user.entity';
 @Entity('login_challenges')
 @Index('idx_login_challenges_active', ['userId'], {
   where: `"invalidated_at" IS NULL AND "consumed_at" IS NULL`,
+  unique: true,
 })
 export class LoginChallenge {
   @PrimaryGeneratedColumn('uuid')
