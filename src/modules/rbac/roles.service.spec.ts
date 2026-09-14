@@ -5,6 +5,11 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { AccessConfigService } from './access-config.service';
 import { Grant } from './entities/grant.entity';
 import { Role } from './entities/role.entity';
+import { UserRole } from './entities/user-role.entity';
+import {
+  RbacAuditEventType,
+  RbacAuditOutcome,
+} from './entities/rbac-audit-event.entity';
 import { RbacAuditService } from './rbac-audit.service';
 import { RbacSelfLockoutService } from './rbac-self-lockout.service';
 import { RolesService } from './roles.service';
@@ -22,6 +27,7 @@ describe('RolesService', () => {
     delete: jest.fn().mockResolvedValue(undefined),
   };
   const grantRepository = { findOne: jest.fn() };
+  const userRoleRepository = { find: jest.fn() };
   const accessConfigService = {
     reload: jest.fn().mockResolvedValue(undefined),
   };
@@ -32,12 +38,17 @@ describe('RolesService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    userRoleRepository.find.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RolesService,
         { provide: getRepositoryToken(Role), useValue: roleRepository },
         { provide: getRepositoryToken(Grant), useValue: grantRepository },
+        {
+          provide: getRepositoryToken(UserRole),
+          useValue: userRoleRepository,
+        },
         { provide: AccessConfigService, useValue: accessConfigService },
         { provide: RbacAuditService, useValue: rbacAuditService },
         { provide: RbacSelfLockoutService, useValue: selfLockoutService },
@@ -118,6 +129,31 @@ describe('RolesService', () => {
 
     expect(roleRepository.delete).toHaveBeenCalledWith('role-1');
     expect(accessConfigService.reload).toHaveBeenCalled();
+  });
+
+  it('records the memberships the delete cascade strips', async () => {
+    roleRepository.findOne.mockResolvedValue({ id: 'role-1', name: 'editor' });
+    grantRepository.findOne.mockResolvedValue(null);
+    userRoleRepository.find.mockResolvedValue([
+      { userId: 'user-1', roleId: 'role-1' },
+      { userId: 'user-2', roleId: 'role-1' },
+    ]);
+
+    await service.delete('role-1', 'admin-1');
+
+    // ON DELETE CASCADE drops every user_roles row silently; without this the
+    // audit trail says a role was deleted and nothing about who lost access.
+    expect(rbacAuditService.record).toHaveBeenCalledWith(
+      RbacAuditEventType.ROLE_DELETED,
+      RbacAuditOutcome.SUCCESS,
+      expect.objectContaining({
+        metadata: {
+          roleName: 'editor',
+          membershipsRemoved: 2,
+          memberUserIds: ['user-1', 'user-2'],
+        },
+      }),
+    );
   });
 
   it('blocks deleting a role referenced by a grant', async () => {
