@@ -41,7 +41,24 @@ export const configValidationSchema = Joi.object<Config>({
   POSTGRES_USER: Joi.string().required(),
   POSTGRES_PASSWORD: Joi.string().required(),
   POSTGRES_DB: Joi.string().required(),
-  POSTGRES_SYNCHRONIZE: Joi.boolean().optional().default(false),
+  /**
+   * Always false. `synchronize` against this schema is destructive, not merely
+   * redundant: it replaces the partial UNIQUE indexes enforcing "one active
+   * challenge per user" with plain ones, drops the admin-directory indexes and
+   * the check constraints outright, and rewrites the named foreign keys. The
+   * schema is owned by the migrations in `src/database/migrations`, so the
+   * switch is rejected at startup rather than trusted to stay unset.
+   */
+  POSTGRES_SYNCHRONIZE: Joi.boolean()
+    .valid(false)
+    .optional()
+    .default(false)
+    .messages({
+      'any.only':
+        'POSTGRES_SYNCHRONIZE must be false: the schema is owned by migrations ' +
+        '(npm run migration:run). Auto-sync drops unique indexes and check ' +
+        'constraints this schema depends on.',
+    }),
   POSTGRES_LOGGING: Joi.boolean().optional().default(false),
   POSTGRES_MIGRATIONS_RUN: Joi.boolean().optional().default(false),
 
