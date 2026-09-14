@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
-import type { StringValue } from 'ms';
 
 import { ConfigService } from '@/core/config/config.service';
 
@@ -10,6 +9,13 @@ export type TokenType = 'access' | 'refresh';
 export interface TokenPayload {
   sub: string;
   typ: TokenType;
+  /** Id of the `auth_sessions` row backing this token — what makes it revocable. */
+  sid: string;
+}
+
+export interface VerifiedToken {
+  sub: string;
+  sessionId: string;
 }
 
 export type TokenFailureReason = 'malformed' | 'invalid_signature' | 'expired';
@@ -20,9 +26,12 @@ export class TokenVerificationError extends Error {
   }
 }
 
-const ACCESS_TOKEN_TTL: StringValue = '15m';
-const REFRESH_TOKEN_TTL: StringValue = '30d';
+const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
+const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const CLOCK_TOLERANCE_SECONDS = 5;
+
+/** Session rows are given the refresh token's lifetime; keep the two in step. */
+export const REFRESH_TOKEN_TTL_MS = REFRESH_TOKEN_TTL_SECONDS * 1000;
 
 @Injectable()
 export class TokenService {
@@ -31,34 +40,42 @@ export class TokenService {
     private readonly configService: ConfigService,
   ) {}
 
-  async signAccessToken(userId: string): Promise<string> {
-    return this.sign(userId, 'access', this.accessSecret(), ACCESS_TOKEN_TTL);
-  }
-
-  async signRefreshToken(userId: string): Promise<string> {
+  async signAccessToken(userId: string, sessionId: string): Promise<string> {
     return this.sign(
       userId,
-      'refresh',
-      this.refreshSecret(),
-      REFRESH_TOKEN_TTL,
+      sessionId,
+      'access',
+      this.accessSecret(),
+      ACCESS_TOKEN_TTL_SECONDS,
     );
   }
 
-  async verifyAccessToken(token: string): Promise<{ sub: string }> {
+  async signRefreshToken(userId: string, sessionId: string): Promise<string> {
+    return this.sign(
+      userId,
+      sessionId,
+      'refresh',
+      this.refreshSecret(),
+      REFRESH_TOKEN_TTL_SECONDS,
+    );
+  }
+
+  async verifyAccessToken(token: string): Promise<VerifiedToken> {
     return this.verify(token, 'access', this.accessSecret());
   }
 
-  async verifyRefreshToken(token: string): Promise<{ sub: string }> {
+  async verifyRefreshToken(token: string): Promise<VerifiedToken> {
     return this.verify(token, 'refresh', this.refreshSecret());
   }
 
   private async sign(
     userId: string,
+    sessionId: string,
     typ: TokenType,
     secret: string,
-    expiresIn: StringValue,
+    expiresIn: number,
   ): Promise<string> {
-    const payload: TokenPayload = { sub: userId, typ };
+    const payload: TokenPayload = { sub: userId, typ, sid: sessionId };
 
     return this.jwtService.signAsync(payload, { secret, expiresIn });
   }
@@ -67,7 +84,7 @@ export class TokenService {
     token: string,
     expectedTyp: TokenType,
     secret: string,
-  ): Promise<{ sub: string }> {
+  ): Promise<VerifiedToken> {
     let payload: TokenPayload;
 
     try {
@@ -83,7 +100,13 @@ export class TokenService {
       throw new TokenVerificationError('malformed');
     }
 
-    return { sub: payload.sub };
+    // Tokens issued before sessions existed carry no `sid` and cannot be tied
+    // to a revocable session, so they are rejected outright.
+    if (!payload.sid) {
+      throw new TokenVerificationError('malformed');
+    }
+
+    return { sub: payload.sub, sessionId: payload.sid };
   }
 
   private classifyVerifyError(error: unknown): TokenVerificationError {

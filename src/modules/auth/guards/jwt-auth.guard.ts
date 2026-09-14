@@ -17,6 +17,7 @@ import {
 } from '../entities/login-audit-event.entity';
 import { LoginAuditService } from '../login-audit.service';
 import { TokenService, TokenVerificationError } from '../token.service';
+import { AuthSessionService } from '../auth-session.service';
 
 export interface RequestUser {
   id: string;
@@ -38,6 +39,7 @@ export class JwtAuthGuard implements CanActivate {
     private readonly userRepository: Repository<User>,
     @InjectRepository(UserRole)
     private readonly userRoleRepository: Repository<UserRole>,
+    private readonly sessionService: AuthSessionService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -49,8 +51,10 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     let sub: string;
+    let sessionId: string;
     try {
-      ({ sub } = await this.tokenService.verifyAccessToken(rawToken));
+      ({ sub, sessionId } =
+        await this.tokenService.verifyAccessToken(rawToken));
     } catch (error) {
       const reason =
         error instanceof TokenVerificationError ? error.reason : 'malformed';
@@ -65,6 +69,14 @@ export class JwtAuthGuard implements CanActivate {
 
     if (user.status !== UserStatus.ACTIVE) {
       return this.reject('user_inactive');
+    }
+
+    // An access token is only as good as the session behind it: logout and
+    // password reset revoke the session, and this is where that takes effect.
+    const session = await this.sessionService.findActive(sessionId, user.id);
+
+    if (!session) {
+      return this.reject('session_revoked');
     }
 
     const memberships = await this.userRoleRepository.find({

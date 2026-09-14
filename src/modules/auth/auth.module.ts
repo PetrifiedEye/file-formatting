@@ -13,11 +13,13 @@ import { RegistrationAuditEvent } from './entities/registration-audit-event.enti
 import { LoginChallenge } from './entities/login-challenge.entity';
 import { PasswordResetChallenge } from './entities/password-reset-challenge.entity';
 import { LoginAuditEvent } from './entities/login-audit-event.entity';
+import { AuthSession } from './entities/auth-session.entity';
 import { ConfirmationChallengeService } from './confirmation-challenge.service';
 import { ConfirmationMailService } from './confirmation-mail.service';
 import { RegistrationAuditService } from './registration-audit.service';
 import { LoginAuditService } from './login-audit.service';
 import { TokenService } from './token.service';
+import { AuthSessionService } from './auth-session.service';
 import { LoginChallengeService } from './login-challenge.service';
 import { PasswordResetService } from './password-reset.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -30,6 +32,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
       LoginChallenge,
       PasswordResetChallenge,
       LoginAuditEvent,
+      AuthSession,
       UserRole,
     ]),
     forwardRef(() => UsersModule),
@@ -45,6 +48,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     RegistrationAuditService,
     LoginAuditService,
     TokenService,
+    AuthSessionService,
     LoginChallengeService,
     PasswordResetService,
     JwtAuthGuard,
@@ -52,6 +56,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
   exports: [
     JwtAuthGuard,
     TokenService,
+    AuthSessionService,
     LoginAuditService,
     ConfirmationMailService,
     forwardRef(() => UsersModule),

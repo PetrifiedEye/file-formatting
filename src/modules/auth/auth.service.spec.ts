@@ -30,6 +30,8 @@ import {
 import { LoginAuditService } from './login-audit.service';
 import { TokenService, TokenVerificationError } from './token.service';
 import { LoginChallengeService } from './login-challenge.service';
+import { AuthSessionService } from './auth-session.service';
+import { SessionRevocationReason } from './entities/auth-session.entity';
 import { hashPassword } from './utils/password-hasher';
 
 describe('AuthService', () => {
@@ -98,6 +100,14 @@ describe('AuthService', () => {
     verifyByLinkToken: jest.fn(),
   };
 
+  const sessionService = {
+    start: jest.fn(),
+    findActive: jest.fn(),
+    touch: jest.fn().mockResolvedValue(undefined),
+    revoke: jest.fn().mockResolvedValue(undefined),
+    revokeAllForUser: jest.fn().mockResolvedValue(0),
+  };
+
   const defaultSettings = {
     registrationConfirmationEnabled: false,
     signInConfirmationEnabled: false,
@@ -112,6 +122,8 @@ describe('AuthService', () => {
     settingsService.getSettings.mockResolvedValue(defaultSettings);
     tokenService.signAccessToken.mockResolvedValue('access-token');
     tokenService.signRefreshToken.mockResolvedValue('refresh-token');
+    sessionService.start.mockResolvedValue({ id: 'session-1' });
+    sessionService.findActive.mockResolvedValue({ id: 'session-1' });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -124,6 +136,7 @@ describe('AuthService', () => {
         { provide: LoginAuditService, useValue: loginAuditService },
         { provide: TokenService, useValue: tokenService },
         { provide: LoginChallengeService, useValue: loginChallengeService },
+        { provide: AuthSessionService, useValue: sessionService },
       ],
     }).compile();
 
@@ -269,8 +282,15 @@ describe('AuthService', () => {
         accessToken: 'access-token',
         refreshToken: 'refresh-token',
       });
-      expect(tokenService.signAccessToken).toHaveBeenCalledWith('user-1');
-      expect(tokenService.signRefreshToken).toHaveBeenCalledWith('user-1');
+      expect(sessionService.start).toHaveBeenCalledWith('user-1');
+      expect(tokenService.signAccessToken).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+      );
+      expect(tokenService.signRefreshToken).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+      );
       expect(loginAuditService.record).toHaveBeenCalledWith(
         LoginAuditEventType.LOGIN_ATTEMPT,
         LoginAuditOutcome.SUCCESS,
@@ -522,16 +542,42 @@ describe('AuthService', () => {
   });
 
   describe('logout', () => {
-    it('always returns the signed-out message', () => {
-      const result = service.logout();
+    it('revokes the presented session', async () => {
+      tokenService.verifyRefreshToken.mockResolvedValue({
+        sub: 'user-1',
+        sessionId: 'session-1',
+      });
+
+      const result = await service.logout('raw-refresh-token', {});
 
       expect(result).toEqual({ message: 'Signed out.' });
+      expect(sessionService.revoke).toHaveBeenCalledWith(
+        'session-1',
+        SessionRevocationReason.LOGOUT,
+      );
+      expect(loginAuditService.record).toHaveBeenCalledWith(
+        LoginAuditEventType.LOGOUT,
+        LoginAuditOutcome.SUCCESS,
+        expect.objectContaining({ userId: 'user-1' }),
+      );
+    });
+
+    it('still reports success when no usable token is presented', async () => {
+      tokenService.verifyRefreshToken.mockRejectedValue(new Error('nope'));
+
+      await expect(service.logout('garbage', {})).resolves.toEqual({
+        message: 'Signed out.',
+      });
+      expect(sessionService.revoke).not.toHaveBeenCalled();
     });
   });
 
   describe('refresh', () => {
     it('issues a fresh token pair for a valid refresh token and active user', async () => {
-      tokenService.verifyRefreshToken.mockResolvedValue({ sub: 'user-1' });
+      tokenService.verifyRefreshToken.mockResolvedValue({
+        sub: 'user-1',
+        sessionId: 'session-1',
+      });
       usersService.findById.mockResolvedValue({
         id: 'user-1',
         email: 'user@example.com',
@@ -585,7 +631,10 @@ describe('AuthService', () => {
     });
 
     it('rejects when the user no longer exists', async () => {
-      tokenService.verifyRefreshToken.mockResolvedValue({ sub: 'user-1' });
+      tokenService.verifyRefreshToken.mockResolvedValue({
+        sub: 'user-1',
+        sessionId: 'session-1',
+      });
       usersService.findById.mockResolvedValue(null);
 
       await expect(
@@ -600,7 +649,10 @@ describe('AuthService', () => {
     });
 
     it('rejects when the user is not active', async () => {
-      tokenService.verifyRefreshToken.mockResolvedValue({ sub: 'user-1' });
+      tokenService.verifyRefreshToken.mockResolvedValue({
+        sub: 'user-1',
+        sessionId: 'session-1',
+      });
       usersService.findById.mockResolvedValue({
         id: 'user-1',
         status: UserStatus.PENDING_CONFIRMATION,

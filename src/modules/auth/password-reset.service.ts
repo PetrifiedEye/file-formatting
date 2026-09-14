@@ -14,6 +14,8 @@ import {
   LoginAuditOutcome,
 } from './entities/login-audit-event.entity';
 import { LoginAuditService } from './login-audit.service';
+import { AuthSessionService } from './auth-session.service';
+import { SessionRevocationReason } from './entities/auth-session.entity';
 import { ConfirmationMailService } from './confirmation-mail.service';
 import type { RequestMeta } from './auth.service';
 import { normalizeEmail } from './utils/email-normalizer';
@@ -45,6 +47,7 @@ export class PasswordResetService {
     private readonly settingsService: SettingsService,
     private readonly confirmationMailService: ConfirmationMailService,
     private readonly loginAuditService: LoginAuditService,
+    private readonly sessionService: AuthSessionService,
   ) {}
 
   async requestReset(
@@ -185,6 +188,12 @@ export class PasswordResetService {
     challenge.consumedAt = new Date();
     await this.challengeRepository.save(challenge);
     await this.usersService.updatePassword(user, passwordHash);
+    // A reset is the remedy for a compromised account, so every session opened
+    // with the old password — including 30-day refresh tokens — dies with it.
+    await this.sessionService.revokeAllForUser(
+      user.id,
+      SessionRevocationReason.PASSWORD_RESET,
+    );
   }
 
   async exchangeLinkToken(token: string): Promise<ExchangedLinkToken> {

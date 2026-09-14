@@ -27,6 +27,8 @@ import {
 } from './entities/login-audit-event.entity';
 import { LoginAuditService } from './login-audit.service';
 import { TokenService } from './token.service';
+import { AuthSessionService } from './auth-session.service';
+import { SessionRevocationReason } from './entities/auth-session.entity';
 import {
   LoginChallengeService,
   LoginChallengeVerifyFailure,
@@ -102,12 +104,23 @@ export class AuthService {
     private readonly loginAuditService: LoginAuditService,
     private readonly tokenService: TokenService,
     private readonly loginChallengeService: LoginChallengeService,
+    private readonly sessionService: AuthSessionService,
   ) {}
 
+  /** Opens a fresh session and mints the token pair that carries its id. */
   private async issueTokens(userId: string): Promise<IssuedTokens> {
+    const session = await this.sessionService.start(userId);
+
+    return this.signForSession(userId, session.id);
+  }
+
+  private async signForSession(
+    userId: string,
+    sessionId: string,
+  ): Promise<IssuedTokens> {
     const [accessToken, refreshToken] = await Promise.all([
-      this.tokenService.signAccessToken(userId),
-      this.tokenService.signRefreshToken(userId),
+      this.tokenService.signAccessToken(userId, sessionId),
+      this.tokenService.signRefreshToken(userId, sessionId),
     ]);
 
     return { accessToken, refreshToken };
@@ -327,7 +340,41 @@ export class AuthService {
     );
   }
 
-  logout(): { message: string } {
+  /**
+   * Revokes the session the caller presents, so its refresh token stops working
+   * immediately instead of outliving the logout by up to 30 days. Always
+   * succeeds: a caller without a usable token is already signed out.
+   */
+  async logout(
+    rawToken: string | undefined,
+    meta: RequestMeta = {},
+  ): Promise<{ message: string }> {
+    if (!rawToken) {
+      return { message: LOGOUT_MESSAGE };
+    }
+
+    let sub: string;
+    let sessionId: string;
+    try {
+      ({ sub, sessionId } =
+        await this.tokenService.verifyRefreshToken(rawToken));
+    } catch {
+      return { message: LOGOUT_MESSAGE };
+    }
+
+    await this.sessionService.revoke(sessionId, SessionRevocationReason.LOGOUT);
+
+    await this.loginAuditService.record(
+      LoginAuditEventType.LOGOUT,
+      LoginAuditOutcome.SUCCESS,
+      {
+        normalizedEmail: 'unknown',
+        userId: sub,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+      },
+    );
+
     return { message: LOGOUT_MESSAGE };
   }
 
@@ -341,8 +388,10 @@ export class AuthService {
     }
 
     let sub: string;
+    let sessionId: string;
     try {
-      ({ sub } = await this.tokenService.verifyRefreshToken(rawRefreshToken));
+      ({ sub, sessionId } =
+        await this.tokenService.verifyRefreshToken(rawRefreshToken));
     } catch {
       await this.recordRefreshFailure(undefined, meta, 'invalid');
       throw new UnauthorizedException(REFRESH_FAILURE_MESSAGE);
@@ -360,7 +409,17 @@ export class AuthService {
       throw new UnauthorizedException(REFRESH_FAILURE_MESSAGE);
     }
 
-    const tokens = await this.issueTokens(user.id);
+    const session = await this.sessionService.findActive(sessionId, user.id);
+
+    if (!session) {
+      await this.recordRefreshFailure(user.id, meta, 'session_revoked');
+      throw new UnauthorizedException(REFRESH_FAILURE_MESSAGE);
+    }
+
+    // Rotate the tokens but keep the session: revoking it here would sign the
+    // caller out of the very session they are renewing.
+    await this.sessionService.touch(session.id);
+    const tokens = await this.signForSession(user.id, session.id);
 
     await this.loginAuditService.record(
       LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
