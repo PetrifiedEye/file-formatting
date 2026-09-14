@@ -6,6 +6,7 @@ import { AccessConfigService } from './access-config.service';
 import { Grant } from './entities/grant.entity';
 import { Role } from './entities/role.entity';
 import { RbacAuditService } from './rbac-audit.service';
+import { RbacSelfLockoutService } from './rbac-self-lockout.service';
 import { RolesService } from './roles.service';
 
 describe('RolesService', () => {
@@ -25,6 +26,9 @@ describe('RolesService', () => {
     reload: jest.fn().mockResolvedValue(undefined),
   };
   const rbacAuditService = { record: jest.fn().mockResolvedValue(undefined) };
+  const selfLockoutService = {
+    assertRetainsControl: jest.fn().mockResolvedValue(undefined),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -36,6 +40,7 @@ describe('RolesService', () => {
         { provide: getRepositoryToken(Grant), useValue: grantRepository },
         { provide: AccessConfigService, useValue: accessConfigService },
         { provide: RbacAuditService, useValue: rbacAuditService },
+        { provide: RbacSelfLockoutService, useValue: selfLockoutService },
       ],
     }).compile();
 

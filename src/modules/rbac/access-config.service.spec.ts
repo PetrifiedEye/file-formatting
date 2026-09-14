@@ -70,6 +70,11 @@ describe('AccessConfigService', () => {
     service = module.get(AccessConfigService);
   });
 
+  afterEach(() => {
+    // A failed reload schedules a retry timer; drop it between tests.
+    service.onModuleDestroy();
+  });
+
   it('denies everything before any snapshot is loaded (empty config)', () => {
     expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(false);
   });
@@ -179,7 +184,7 @@ describe('AccessConfigService', () => {
       );
     });
 
-    it('keeps the previous snapshot and logs a failure when the DB read fails', async () => {
+    it('fails closed and logs a failure when the DB read fails', async () => {
       roles = [roleAdmin];
       permissions = [permissionDocs];
       grants = [
@@ -196,12 +201,38 @@ describe('AccessConfigService', () => {
       roleRepository.find.mockRejectedValueOnce(new Error('db unavailable'));
       await service.reload();
 
-      expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(true);
+      // Keeping the old snapshot would honour grants the database no longer
+      // has — including one that was just revoked.
+      expect(service.isStale()).toBe(true);
+      expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(false);
       expect(rbacAuditService.record).toHaveBeenCalledWith(
         RbacAuditEventType.CONFIG_RELOAD_FAILED,
         RbacAuditOutcome.FAILURE,
         expect.any(Object),
       );
+    });
+
+    it('recovers once a later reload succeeds', async () => {
+      roles = [roleAdmin];
+      permissions = [permissionDocs];
+      grants = [
+        {
+          roleId: roleAdmin.id,
+          permissionId: permissionDocs.id,
+          actions: null,
+        },
+      ];
+
+      await service.onModuleInit();
+
+      roleRepository.find.mockRejectedValueOnce(new Error('db unavailable'));
+      await service.reload();
+      expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(false);
+
+      await service.reload();
+
+      expect(service.isStale()).toBe(false);
+      expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(true);
     });
 
     it('narrows a grant to the permission current actions on reload', async () => {

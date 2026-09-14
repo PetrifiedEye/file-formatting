@@ -5,6 +5,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
 import { TokenService } from '@/modules/auth/token.service';
 import { LoginAuditService } from '@/modules/auth/login-audit.service';
+import { AuthSessionService } from '@/modules/auth/auth-session.service';
 import { User } from '@/modules/users/entities/user.entity';
 import { UserRole } from './entities/user-role.entity';
 
@@ -39,6 +40,10 @@ describe('PermissionsController', () => {
         { provide: TokenService, useValue: { verifyAccessToken: jest.fn() } },
         { provide: LoginAuditService, useValue: { record: jest.fn() } },
         {
+          provide: AuthSessionService,
+          useValue: { findActive: jest.fn() },
+        },
+        {
           provide: getRepositoryToken(User),
           useValue: { findOne: jest.fn() },
         },
@@ -64,6 +69,16 @@ describe('PermissionsController', () => {
     );
 
     expect(required).toEqual({ permission: 'rbac', action: 'manage' });
+
+    // Metadata alone is inert: without the guards actually attached, every
+    // endpoint below would be public and this suite would still pass.
+    const guards = Reflect.getMetadata(
+      '__guards__',
+      PermissionsController,
+    ) as unknown[];
+    expect(guards).toEqual(
+      expect.arrayContaining([JwtAuthGuard, PermissionGuard]),
+    );
   });
 
   it('delegates list() to the service', async () => {
