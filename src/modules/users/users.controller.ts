@@ -9,6 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -316,7 +317,7 @@ export class UsersController {
   })
   @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
   async updateEmailDirect(
-    @Param('userId') userId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
     @Req() request: RequestWithUser,
     @Body() dto: AdminUpdateEmailDto,
   ): Promise<{ id: string; photo: string | null; email: string }> {
@@ -430,7 +431,7 @@ export class UsersController {
   @ApiConflictResponse({ description: 'Account is already mid-deletion' })
   @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
   async adminDeleteUser(
-    @Param('userId') userId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
     @Req() request: RequestWithUser,
   ): Promise<{ message: string }> {
     const hasPermission = this.accessConfigService.hasPermission(

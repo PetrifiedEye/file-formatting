@@ -481,6 +481,29 @@ describe('Account Deletion (e2e)', () => {
     });
   });
 
+  describe('Scenario 8b — deletion targeting a malformed user id', () => {
+    it('rejects a non-UUID id with 400 and writes no audit row', async () => {
+      const before = await auditRepository.count();
+
+      await request(app.getHttpServer())
+        .delete('/users/not-a-uuid')
+        .set('Cookie', adminCookie)
+        .expect(400);
+
+      // The id never reached the database, so there is nothing to audit — and
+      // certainly not the CONFLICT row the unguarded 500 used to leave behind.
+      expect(await auditRepository.count()).toBe(before);
+    });
+
+    it('rejects a non-UUID id on the admin email path with 400', async () => {
+      await request(app.getHttpServer())
+        .patch('/users/not-a-uuid/email')
+        .set('Cookie', adminCookie)
+        .send({ email: `renamed-${Date.now()}@example.com` })
+        .expect(400);
+    });
+  });
+
   describe('Scenario 9 — concurrent deletion attempts', () => {
     it('rejects a second admin-delete once the account is already mid-deletion', async () => {
       await userRepository.update(

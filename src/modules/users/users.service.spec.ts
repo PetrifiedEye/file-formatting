@@ -291,12 +291,15 @@ describe('UsersService', () => {
 
     it('stores the file, updates photoUrl, and deletes the previous photo', async () => {
       const user = {
-        id: 'user-1',
+        id: '11111111-1111-4111-8111-111111111111',
         photoUrl: 'http://localhost:3007/assets/photos/old-uuid.png',
       } as User;
       repository.findOne.mockResolvedValue(user);
 
-      const result = await service.updatePhoto('user-1', jpegBuffer);
+      const result = await service.updatePhoto(
+        '11111111-1111-4111-8111-111111111111',
+        jpegBuffer,
+      );
 
       expect(storageService.save).toHaveBeenCalledWith(jpegBuffer, 'jpg');
       expect(result.photoUrl).toBe(
@@ -308,11 +311,14 @@ describe('UsersService', () => {
 
     it('does not attempt to delete when there was no previous photo', async () => {
       repository.findOne.mockResolvedValue({
-        id: 'user-1',
+        id: '11111111-1111-4111-8111-111111111111',
         photoUrl: null,
       } as User);
 
-      await service.updatePhoto('user-1', jpegBuffer);
+      await service.updatePhoto(
+        '11111111-1111-4111-8111-111111111111',
+        jpegBuffer,
+      );
 
       expect(storageService.delete).not.toHaveBeenCalled();
     });
@@ -321,16 +327,30 @@ describe('UsersService', () => {
       repository.findOne.mockResolvedValue(null);
 
       await expect(
-        service.updatePhoto('missing', jpegBuffer),
+        service.updatePhoto('11111111-1111-4111-8111-111111111111', jpegBuffer),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(storageService.save).not.toHaveBeenCalled();
     });
 
+    it('treats a malformed id as not found instead of querying with it', async () => {
+      await expect(
+        service.updatePhoto('not-a-uuid', jpegBuffer),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      // Postgres rejects the uuid cast, so the unguarded query answered 500.
+      expect(repository.findOne).not.toHaveBeenCalled();
+      expect(storageService.save).not.toHaveBeenCalled();
+    });
+
     it('throws BadRequestException for a file with no recognizable image signature', async () => {
-      repository.findOne.mockResolvedValue({ id: 'user-1' } as User);
+      repository.findOne.mockResolvedValue({
+        id: '11111111-1111-4111-8111-111111111111',
+      } as User);
 
       await expect(
-        service.updatePhoto('user-1', Buffer.from('not an image')),
+        service.updatePhoto(
+          '11111111-1111-4111-8111-111111111111',
+          Buffer.from('not an image'),
+        ),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(storageService.save).not.toHaveBeenCalled();
     });

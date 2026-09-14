@@ -44,9 +44,11 @@ export class UsersService {
   ) {}
 
   async updatePhoto(targetId: string, fileBuffer: Buffer): Promise<User> {
-    const user = await this.usersRepository.findOne({
-      where: { id: targetId },
-    });
+    // A malformed id is "not found", not a 500 from Postgres rejecting the
+    // uuid cast — the same contract `getProfileFor` applies.
+    const user = isUUID(targetId)
+      ? await this.usersRepository.findOne({ where: { id: targetId } })
+      : null;
 
     if (!user) {
       throw new NotFoundException('User not found');
