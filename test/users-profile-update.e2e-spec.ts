@@ -417,6 +417,112 @@ describe('Users Profile Update (e2e)', () => {
     });
   });
 
+  describe('Scenario 6 — two accounts racing for the same email', () => {
+    it('audits the loser EMAIL_CHANGE_FAILED instead of rolling it back', async () => {
+      const contestedEmail = `contested-${Date.now()}-${Math.random()}@example.com`;
+
+      // selfUser gets a confirmation code for the contested address...
+      await request(app.getHttpServer())
+        .post('/users/me/email-change')
+        .set('Cookie', selfCookie)
+        .send({ newEmail: contestedEmail })
+        .expect(202);
+
+      const challenge = await challengeRepository.findOneOrFail({
+        where: { userId: selfUser.id },
+      });
+      const otp = bruteForceOtp(challenge.otpHash);
+
+      // ...but otherUser takes the address first, via the admin route.
+      clearThrottler();
+      await request(app.getHttpServer())
+        .patch(`/users/${otherUser.id}/email`)
+        .set('Cookie', adminCookie)
+        .send({ email: contestedEmail })
+        .expect(200);
+
+      await profileAuditRepository.createQueryBuilder().delete().execute();
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/email-change/confirm')
+        .set('Cookie', selfCookie)
+        .send({ code: otp })
+        .expect(409);
+
+      // The conflict is detected inside a @Transactional method that then
+      // rolls back; the failure row has to be written outside it to survive.
+      const events = await profileAuditRepository.find({
+        where: { targetId: selfUser.id },
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0].action).toBe('email_change_failed');
+      expect(events[0].outcome).toBe('failure');
+
+      // The loser keeps their original address and the winner keeps the
+      // contested one — the rollback still did its job.
+      const loser = await userRepository.findOneOrFail({
+        where: { id: selfUser.id },
+      });
+      expect(loser.email).toBe(selfUser.email);
+      const winner = await userRepository.findOneOrFail({
+        where: { id: otherUser.id },
+      });
+      expect(winner.email).toBe(contestedEmail);
+    });
+
+    it('audits a conflict the same way the wrong-code path does', async () => {
+      const contestedEmail = `contested2-${Date.now()}-${Math.random()}@example.com`;
+
+      await request(app.getHttpServer())
+        .post('/users/me/email-change')
+        .set('Cookie', selfCookie)
+        .send({ newEmail: contestedEmail })
+        .expect(202);
+
+      const challenge = await challengeRepository.findOneOrFail({
+        where: { userId: selfUser.id },
+      });
+      const otp = bruteForceOtp(challenge.otpHash);
+
+      await profileAuditRepository.createQueryBuilder().delete().execute();
+
+      // A wrong code is rejected outside any transaction, and has always
+      // audited. Count its rows as the baseline.
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/email-change/confirm')
+        .set('Cookie', selfCookie)
+        .send({ code: '000000' })
+        .expect(400);
+
+      const afterWrongCode = await profileAuditRepository.countBy({
+        targetId: selfUser.id,
+      });
+      expect(afterWrongCode).toBe(1);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .patch(`/users/${otherUser.id}/email`)
+        .set('Cookie', adminCookie)
+        .send({ email: contestedEmail })
+        .expect(200);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/email-change/confirm')
+        .set('Cookie', selfCookie)
+        .send({ code: otp })
+        .expect(409);
+
+      // Same action, same user, different code path: one more row, not zero.
+      const afterConflict = await profileAuditRepository.countBy({
+        targetId: selfUser.id,
+      });
+      expect(afterConflict).toBe(afterWrongCode + 1);
+    });
+  });
+
   describe('Scenario 4 — admin direct email update (US3)', () => {
     it('lets an admin update another user email immediately, no OTP', async () => {
       const response = await request(app.getHttpServer())

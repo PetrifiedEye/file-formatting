@@ -171,7 +171,21 @@ export class EmailChangeService {
       throw new BadRequestException(GENERIC_CONFIRM_FAILURE);
     }
 
-    return this.completeConfirm(user, challenge);
+    try {
+      return await this.completeConfirm(user, challenge);
+    } catch (error) {
+      if (error instanceof ConflictException) {
+        // completeConfirm() is @Transactional, so a failure audit written
+        // inside it rolls back with the rest of the transaction and the loser
+        // of an email race leaves no trace. Recorded out here, after the
+        // rollback, where it commits.
+        await this.recordFailure(
+          user.id,
+          ProfileAuditAction.EMAIL_CHANGE_FAILED,
+        );
+      }
+      throw error;
+    }
   }
 
   @Transactional()
@@ -183,7 +197,8 @@ export class EmailChangeService {
       where: { email: challenge.newEmail },
     });
     if (existing && existing.id !== user.id) {
-      await this.recordFailure(user.id, ProfileAuditAction.EMAIL_CHANGE_FAILED);
+      // The audit row for this is written by the caller, outside this
+      // transaction — see confirm().
       throw new ConflictException('Email already in use');
     }
 
