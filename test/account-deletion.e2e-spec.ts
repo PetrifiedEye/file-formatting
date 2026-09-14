@@ -31,6 +31,9 @@ import { Grant } from '../src/modules/rbac/entities/grant.entity';
 import { Permission } from '../src/modules/rbac/entities/permission.entity';
 import { Role } from '../src/modules/rbac/entities/role.entity';
 import { UserRole } from '../src/modules/rbac/entities/user-role.entity';
+import { AuthSession } from '../src/modules/auth/entities/auth-session.entity';
+import { PasswordResetChallenge } from '../src/modules/auth/entities/password-reset-challenge.entity';
+import { EmailChangeChallenge } from '../src/modules/users/entities/email-change-challenge.entity';
 import { AccountDeletionAuditEvent } from '../src/modules/users/entities/account-deletion-audit-event.entity';
 import { AccountDeletionChallenge } from '../src/modules/users/entities/account-deletion-challenge.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
@@ -84,6 +87,9 @@ describe('Account Deletion (e2e)', () => {
   let challengeRepository: Repository<AccountDeletionChallenge>;
   let auditRepository: Repository<AccountDeletionAuditEvent>;
   let loginAuditRepository: Repository<LoginAuditEvent>;
+  let sessionRepository: Repository<AuthSession>;
+  let passwordResetRepository: Repository<PasswordResetChallenge>;
+  let emailChangeRepository: Repository<EmailChangeChallenge>;
   let accessConfigService: AccessConfigService;
   let throttlerStorage: ThrottlerStorageService;
   let configService: ConfigService;
@@ -151,6 +157,13 @@ describe('Account Deletion (e2e)', () => {
     );
     loginAuditRepository = moduleFixture.get(
       getRepositoryToken(LoginAuditEvent),
+    );
+    sessionRepository = moduleFixture.get(getRepositoryToken(AuthSession));
+    passwordResetRepository = moduleFixture.get(
+      getRepositoryToken(PasswordResetChallenge),
+    );
+    emailChangeRepository = moduleFixture.get(
+      getRepositoryToken(EmailChangeChallenge),
     );
     accessConfigService = moduleFixture.get(AccessConfigService);
     throttlerStorage = moduleFixture.get<ThrottlerStorage>(
@@ -545,6 +558,186 @@ describe('Account Deletion (e2e)', () => {
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
+    });
+  });
+
+  describe('Scenario 13 — every row hanging off the account goes with it', () => {
+    /**
+     * Gives selfUser at least one row in each table that references users:
+     * a role membership, two sessions, and three kinds of challenge — plus a
+     * photo on disk and audit rows that must NOT cascade.
+     */
+    async function buildFullFootprint(): Promise<{
+      photoAbsolutePath: string;
+      secondCookie: string;
+    }> {
+      const role = await roleRepository.save(
+        roleRepository.create({
+          name: `member-${Date.now()}-${Math.random()}`,
+        }),
+      );
+      await userRoleRepository.save(
+        userRoleRepository.create({ userId: selfUser.id, roleId: role.id }),
+      );
+
+      await request(app.getHttpServer())
+        .patch(`/users/${selfUser.id}`)
+        .set('Cookie', selfCookie)
+        .attach('photo', JPEG_BUFFER, 'avatar.jpg')
+        .expect(200);
+
+      const withPhoto = await userRepository.findOneOrFail({
+        where: { id: selfUser.id },
+      });
+      const photoAbsolutePath = resolve(
+        configService.get('ASSETS_DIR'),
+        withPhoto.photoUrl!.replace(
+          `${configService.get('ASSETS_BASE_URL')}/assets/`,
+          '',
+        ),
+      );
+      expect(existsSync(photoAbsolutePath)).toBe(true);
+
+      // A second concurrent sign-in, so the cascade has to clear more than
+      // just the session doing the deleting.
+      clearThrottler();
+      const secondLogin = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: selfUser.email, password: TEST_PASSWORD })
+        .expect(200);
+      const secondCookie = extractSessionCookie(
+        secondLogin.headers['set-cookie'] as unknown as string[],
+      );
+
+      // Inserted directly rather than via POST /auth/password-reset/request:
+      // that endpoint is a no-op unless passwordRecoveryConfirmationEnabled is
+      // set, and this suite should not depend on global settings state.
+      await passwordResetRepository.save(
+        passwordResetRepository.create({
+          userId: selfUser.id,
+          otpHash: hashSecret('123456'),
+          linkTokenHash: hashSecret(`link-${Date.now()}-${Math.random()}`),
+          issuedAt: new Date(),
+          expiresAt: new Date(Date.now() + 900000),
+          attemptsRemaining: 5,
+        }),
+      );
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/email-change')
+        .set('Cookie', selfCookie)
+        .send({ newEmail: `moved-${Date.now()}-${Math.random()}@example.com` })
+        .expect(202);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/delete')
+        .set('Cookie', selfCookie)
+        .expect(202);
+
+      // Guard the guard: if any of these were already empty, the assertions
+      // after the deletion would prove nothing.
+      await expect(
+        userRoleRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(1);
+      await expect(
+        sessionRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(2);
+      await expect(
+        passwordResetRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(1);
+      await expect(
+        emailChangeRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(1);
+      await expect(
+        challengeRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(1);
+
+      return { photoAbsolutePath, secondCookie };
+    }
+
+    async function expectFootprintGone(photoAbsolutePath: string) {
+      await expect(userRepository.countBy({ id: selfUser.id })).resolves.toBe(
+        0,
+      );
+      await expect(
+        userRoleRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(0);
+      await expect(
+        sessionRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(0);
+      await expect(
+        passwordResetRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(0);
+      await expect(
+        emailChangeRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(0);
+      await expect(
+        challengeRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(0);
+      expect(existsSync(photoAbsolutePath)).toBe(false);
+    }
+
+    it('cascades every dependent row, and the photo, on self-deletion', async () => {
+      const { photoAbsolutePath, secondCookie } = await buildFullFootprint();
+
+      const challenge = await challengeRepository.findOneOrFail({
+        where: { userId: selfUser.id },
+      });
+      const otp = bruteForceOtp(challenge.otpHash);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/delete/confirm')
+        .set('Cookie', selfCookie)
+        .send({ code: otp })
+        .expect(200);
+
+      await expectFootprintGone(photoAbsolutePath);
+
+      // The other browser's session is gone too, not just the one that
+      // confirmed the deletion.
+      clearThrottler();
+      await request(app.getHttpServer())
+        .get('/auth/session')
+        .set('Cookie', secondCookie)
+        .expect(401);
+    });
+
+    it('cascades the same rows on admin deletion', async () => {
+      const { photoAbsolutePath } = await buildFullFootprint();
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .delete(`/users/${selfUser.id}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      await expectFootprintGone(photoAbsolutePath);
+    });
+
+    it('keeps the audit trail, detaching it rather than cascading it', async () => {
+      await buildFullFootprint();
+
+      const auditBefore = await loginAuditRepository.countBy({
+        userId: selfUser.id,
+      });
+      expect(auditBefore).toBeGreaterThan(0);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .delete(`/users/${selfUser.id}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      // login_audit_events.user_id is ON DELETE SET NULL: the history of what
+      // happened survives, stripped of the reference to the removed account.
+      await expect(
+        loginAuditRepository.countBy({ userId: selfUser.id }),
+      ).resolves.toBe(0);
+      const orphaned = await loginAuditRepository.count();
+      expect(orphaned).toBeGreaterThanOrEqual(auditBefore);
     });
   });
 
