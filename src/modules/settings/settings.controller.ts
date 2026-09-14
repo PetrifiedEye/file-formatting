@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { SettingsService } from './settings.service';
@@ -7,6 +7,22 @@ import {
   UpdateConfirmationPolicyRequestDto,
 } from './dto/confirmation-policy-response.dto';
 import { AdminGuard } from './guards/admin.guard';
+
+interface RequestWithActor {
+  user?: { id: string };
+  ip?: string;
+  headers: Record<string, string | string[] | undefined>;
+}
+
+function extractActor(req: RequestWithActor) {
+  const rawAgent = req.headers['user-agent'];
+
+  return {
+    actorUserId: req.user?.id ?? null,
+    ipAddress: req.ip ?? null,
+    userAgent: Array.isArray(rawAgent) ? rawAgent[0] : (rawAgent ?? null),
+  };
+}
 
 @ApiTags('Admin Settings')
 @Controller('admin/settings')
@@ -27,8 +43,12 @@ export class SettingsController {
   @ApiOkResponse({ type: ConfirmationPolicyResponseDto })
   async updateConfirmationPolicy(
     @Body() dto: UpdateConfirmationPolicyRequestDto,
+    @Req() req: RequestWithActor,
   ): Promise<ConfirmationPolicyResponseDto> {
-    const settings = await this.settingsService.updateConfirmationPolicy(dto);
+    const settings = await this.settingsService.updateConfirmationPolicy(
+      dto,
+      extractActor(req),
+    );
     return this.toResponse(settings);
   }
 
