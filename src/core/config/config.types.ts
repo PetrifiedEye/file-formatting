@@ -33,6 +33,12 @@ export interface Config {
   THROTTLE_GLOBAL_LIMIT?: number;
 
   /**
+   * How often each process rebuilds its in-memory RBAC snapshot from the
+   * database. 0 disables the refresh.
+   */
+  RBAC_SNAPSHOT_REFRESH_MS?: number;
+
+  /**
    * PostgreSQL database options
    */
   POSTGRES_HOST: string;
