@@ -11,6 +11,7 @@ import {
 } from '../entities/login-audit-event.entity';
 import { LoginAuditService } from '../login-audit.service';
 import { TokenService, TokenVerificationError } from '../token.service';
+import { AuthSessionService } from '../auth-session.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
 describe('JwtAuthGuard', () => {
@@ -20,6 +21,7 @@ describe('JwtAuthGuard', () => {
   const loginAuditService = { record: jest.fn() };
   const userRepository = { findOne: jest.fn() };
   const userRoleRepository = { find: jest.fn() };
+  const sessionService = { findActive: jest.fn() };
 
   const buildContext = (cookies?: Record<string, string>): ExecutionContext =>
     ({
@@ -38,10 +40,12 @@ describe('JwtAuthGuard', () => {
         { provide: LoginAuditService, useValue: loginAuditService },
         { provide: getRepositoryToken(User), useValue: userRepository },
         { provide: getRepositoryToken(UserRole), useValue: userRoleRepository },
+        { provide: AuthSessionService, useValue: sessionService },
       ],
     }).compile();
 
     guard = module.get(JwtAuthGuard);
+    sessionService.findActive.mockResolvedValue({ id: 'session-1' });
   });
 
   it('rejects and audits when no access token cookie is present', async () => {
@@ -102,7 +106,10 @@ describe('JwtAuthGuard', () => {
   });
 
   it('rejects and audits when the user no longer exists', async () => {
-    tokenService.verifyAccessToken.mockResolvedValue({ sub: 'user-1' });
+    tokenService.verifyAccessToken.mockResolvedValue({
+      sub: 'user-1',
+      sessionId: 'session-1',
+    });
     userRepository.findOne.mockResolvedValue(null);
 
     await expect(
@@ -116,7 +123,10 @@ describe('JwtAuthGuard', () => {
   });
 
   it('rejects and audits when the user is not active', async () => {
-    tokenService.verifyAccessToken.mockResolvedValue({ sub: 'user-1' });
+    tokenService.verifyAccessToken.mockResolvedValue({
+      sub: 'user-1',
+      sessionId: 'session-1',
+    });
     userRepository.findOne.mockResolvedValue({
       id: 'user-1',
       status: UserStatus.PENDING_CONFIRMATION,
@@ -133,7 +143,10 @@ describe('JwtAuthGuard', () => {
   });
 
   it('populates request.user with id and roles for a valid token', async () => {
-    tokenService.verifyAccessToken.mockResolvedValue({ sub: 'user-1' });
+    tokenService.verifyAccessToken.mockResolvedValue({
+      sub: 'user-1',
+      sessionId: 'session-1',
+    });
     userRepository.findOne.mockResolvedValue({
       id: 'user-1',
       status: UserStatus.ACTIVE,
@@ -159,5 +172,28 @@ describe('JwtAuthGuard', () => {
       roles: ['admin', 'editor'],
     });
     expect(loginAuditService.record).not.toHaveBeenCalled();
+  });
+
+  it('rejects and audits a token whose session was revoked', async () => {
+    tokenService.verifyAccessToken.mockResolvedValue({
+      sub: 'user-1',
+      sessionId: 'session-1',
+    });
+    userRepository.findOne.mockResolvedValue({
+      id: 'user-1',
+      status: UserStatus.ACTIVE,
+    });
+    // Logout and password reset revoke the session; the still-unexpired access
+    // token must stop working at that moment.
+    sessionService.findActive.mockResolvedValue(null);
+
+    await expect(
+      guard.canActivate(buildContext({ access_token: 'good-token' })),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(loginAuditService.record).toHaveBeenCalledWith(
+      LoginAuditEventType.ACCESS_CHECK_FAILED,
+      LoginAuditOutcome.FAILURE,
+      expect.objectContaining({ failureReason: 'session_revoked' }),
+    );
   });
 });

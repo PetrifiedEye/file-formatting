@@ -166,14 +166,22 @@ describe('AuthController', () => {
     expect(reply.setCookie).toHaveBeenCalledTimes(2);
   });
 
-  it('clears both cookies on logout without requiring auth', () => {
-    authService.logout.mockReturnValue({ message: 'Signed out.' });
+  it('revokes the session and clears both cookies on logout', async () => {
+    authService.logout.mockResolvedValue({ message: 'Signed out.' });
     const reply = makeReply();
+    const req = {
+      ip: '127.0.0.1',
+      headers: {},
+      cookies: { refresh_token: 'raw-rt' },
+    } as never;
 
-    const result = controller.logout(reply as never);
+    const result = await controller.logout(req, reply as never);
 
     expect(result.message).toBe('Signed out.');
-    expect(authService.logout).toHaveBeenCalledWith();
+    expect(authService.logout).toHaveBeenCalledWith(
+      'raw-rt',
+      expect.any(Object),
+    );
     expect(reply.clearCookie).toHaveBeenCalledTimes(2);
     expect(reply.clearCookie).toHaveBeenCalledWith(
       'access_token',

@@ -30,10 +30,10 @@ describe('TokenService', () => {
 
   describe('access token', () => {
     it('signs and verifies a round trip', async () => {
-      const token = await service.signAccessToken('user-1');
+      const token = await service.signAccessToken('user-1', 'session-1');
       const payload = await service.verifyAccessToken(token);
 
-      expect(payload).toEqual({ sub: 'user-1' });
+      expect(payload).toEqual({ sub: 'user-1', sessionId: 'session-1' });
     });
 
     it('rejects a token signed with the wrong secret', async () => {
@@ -107,22 +107,43 @@ describe('TokenService', () => {
     it('accepts a token within the clock-skew tolerance', async () => {
       const jwtService = new JwtService();
       const token = await jwtService.signAsync(
-        { sub: 'user-1', typ: 'access' },
+        { sub: 'user-1', typ: 'access', sid: 'session-1' },
         { secret: 'access-secret', expiresIn: '-3s' },
       );
 
       await expect(service.verifyAccessToken(token)).resolves.toEqual({
         sub: 'user-1',
+        sessionId: 'session-1',
       });
+    });
+
+    it('rejects a pre-session token that carries no sid', async () => {
+      const jwtService = new JwtService();
+      const token = await jwtService.signAsync(
+        { sub: 'user-1', typ: 'access' },
+        { secret: 'access-secret', expiresIn: '15m' },
+      );
+
+      // Without a session id there is nothing to revoke, so such a token must
+      // not authenticate anyone.
+      let error: unknown;
+      try {
+        await service.verifyAccessToken(token);
+      } catch (err) {
+        error = err;
+      }
+
+      expect(error).toBeInstanceOf(TokenVerificationError);
+      expect((error as TokenVerificationError).reason).toBe('malformed');
     });
   });
 
   describe('refresh token', () => {
     it('signs and verifies a round trip', async () => {
-      const token = await service.signRefreshToken('user-1');
+      const token = await service.signRefreshToken('user-1', 'session-1');
       const payload = await service.verifyRefreshToken(token);
 
-      expect(payload).toEqual({ sub: 'user-1' });
+      expect(payload).toEqual({ sub: 'user-1', sessionId: 'session-1' });
     });
 
     it('rejects a token signed with the wrong secret', async () => {
@@ -167,7 +188,7 @@ describe('TokenService', () => {
     });
 
     it('an access token cannot be used as a refresh token even with the right secret guessed', async () => {
-      const accessToken = await service.signAccessToken('user-1');
+      const accessToken = await service.signAccessToken('user-1', 'session-1');
 
       await expect(
         service.verifyRefreshToken(accessToken),

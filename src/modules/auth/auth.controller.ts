@@ -345,10 +345,23 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Log out and clear the session cookies' })
+  @ApiOperation({
+    summary: 'Log out, revoking the session and clearing its cookies',
+  })
   @ApiOkResponse({ description: 'Signed out' })
-  logout(@Res({ passthrough: true }) reply: FastifyReply): { message: string } {
-    const result = this.authService.logout();
+  async logout(
+    @Req()
+    req: {
+      ip?: string;
+      headers: Record<string, string | string[] | undefined>;
+      cookies?: Record<string, string | undefined>;
+    },
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<{ message: string }> {
+    const result = await this.authService.logout(
+      req.cookies?.[REFRESH_TOKEN_COOKIE_NAME],
+      extractMeta(req),
+    );
 
     this.clearAuthCookies(reply);
 

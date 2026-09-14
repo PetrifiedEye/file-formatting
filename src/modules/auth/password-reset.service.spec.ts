@@ -15,6 +15,8 @@ import { PasswordResetChallenge } from './entities/password-reset-challenge.enti
 import { PasswordResetService } from './password-reset.service';
 import { LoginAuditService } from './login-audit.service';
 import { ConfirmationMailService } from './confirmation-mail.service';
+import { AuthSessionService } from './auth-session.service';
+import { SessionRevocationReason } from './entities/auth-session.entity';
 import { hashSecret } from './utils/confirmation-token';
 
 describe('PasswordResetService', () => {
@@ -56,6 +58,10 @@ describe('PasswordResetService', () => {
     record: jest.fn(),
   };
 
+  const sessionService = {
+    revokeAllForUser: jest.fn().mockResolvedValue(1),
+  };
+
   const defaultSettings = {
     passwordRecoveryConfirmationEnabled: true,
     passwordMinLength: 8,
@@ -78,6 +84,7 @@ describe('PasswordResetService', () => {
         { provide: UsersService, useValue: usersService },
         { provide: SettingsService, useValue: settingsService },
         { provide: ConfirmationMailService, useValue: confirmationMailService },
+        { provide: AuthSessionService, useValue: sessionService },
         { provide: LoginAuditService, useValue: loginAuditService },
       ],
     }).compile();
@@ -151,6 +158,12 @@ describe('PasswordResetService', () => {
 
       expect(result.message).toContain('reset');
       expect(usersService.updatePassword).toHaveBeenCalled();
+      // A reset must not leave 30-day refresh tokens minted with the old
+      // password alive.
+      expect(sessionService.revokeAllForUser).toHaveBeenCalledWith(
+        'user-1',
+        SessionRevocationReason.PASSWORD_RESET,
+      );
     });
 
     it('rejects a weak new password without touching the challenge', async () => {
