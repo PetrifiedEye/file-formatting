@@ -56,6 +56,13 @@ class FlipController {
   protectedRoute() {
     return { ok: true };
   }
+
+  @RequirePermission('docs', 'write')
+  @UseGuards(PermissionGuard)
+  @Get('writable')
+  writableRoute() {
+    return { ok: true };
+  }
 }
 
 @Module({
@@ -304,6 +311,127 @@ describe('RBAC Grants CRUD (e2e)', () => {
       .set('Cookie', nonAdminCookie)
       .send({ roleId: role.id, permissionId: permission.id })
       .expect(403);
+  });
+
+  describe('revocation propagates to the holder next request', () => {
+    it('takes away exactly the narrowed action, leaving the rest working', async () => {
+      const user = await userRepository.save(
+        userRepository.create({
+          email: `rbac-narrow-${Date.now()}-${Math.random()}@example.com`,
+          passwordHash: 'not-a-real-hash',
+        }),
+      );
+      const role = await roleRepository.save(
+        roleRepository.create({ name: `narrow-role-${Date.now()}` }),
+      );
+      const permission = await permissionRepository.save(
+        permissionRepository.create({
+          name: 'docs',
+          actions: ['read', 'write'],
+        }),
+      );
+      await userRoleRepository.save(
+        userRoleRepository.create({ userId: user.id, roleId: role.id }),
+      );
+
+      const grantResponse = await request(app.getHttpServer())
+        .post('/rbac/grants')
+        .set('Cookie', adminCookie)
+        .send({
+          roleId: role.id,
+          permissionId: permission.id,
+          actions: ['read', 'write'],
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .get('/test-rbac-flip/protected')
+        .set('x-test-user-id', user.id)
+        .expect(200);
+      await request(app.getHttpServer())
+        .get('/test-rbac-flip/writable')
+        .set('x-test-user-id', user.id)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/rbac/grants/${grantResponse.body.id}`)
+        .set('Cookie', adminCookie)
+        .send({ actions: ['read'] })
+        .expect(200);
+
+      // Revoking `write` must cost the holder `write` and nothing else.
+      await request(app.getHttpServer())
+        .get('/test-rbac-flip/writable')
+        .set('x-test-user-id', user.id)
+        .expect(403);
+      await request(app.getHttpServer())
+        .get('/test-rbac-flip/protected')
+        .set('x-test-user-id', user.id)
+        .expect(200);
+    });
+
+    it('applies to a caller already holding a live session cookie', async () => {
+      // The flip cases above authenticate through the x-test-user-id stand-in.
+      // This one uses a real signed-in session, so it would also catch a
+      // permission snapshot baked into the token at sign-in time.
+      const passwordHash = await hashPassword(TEST_PASSWORD);
+      const secondAdmin = await userRepository.save(
+        userRepository.create({
+          email: `rbac-second-admin-${Date.now()}-${Math.random()}@example.com`,
+          passwordHash,
+          status: UserStatus.ACTIVE,
+          confirmedAt: new Date(),
+        }),
+      );
+      const secondAdminRole = await roleRepository.save(
+        roleRepository.create({
+          name: `admin2-${Date.now()}-${Math.random()}`,
+        }),
+      );
+      const rbacPermission = await permissionRepository.findOneOrFail({
+        where: { name: 'rbac' },
+      });
+      const secondGrant = await grantRepository.save(
+        grantRepository.create({
+          roleId: secondAdminRole.id,
+          permissionId: rbacPermission.id,
+          actions: ['manage'],
+        }),
+      );
+      await userRoleRepository.save(
+        userRoleRepository.create({
+          userId: secondAdmin.id,
+          roleId: secondAdminRole.id,
+        }),
+      );
+      await accessConfigService.reload();
+
+      clearThrottler();
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: secondAdmin.email, password: TEST_PASSWORD })
+        .expect(200);
+      const secondAdminCookie = extractSessionCookie(
+        login.headers['set-cookie'] as unknown as string[],
+      );
+
+      await request(app.getHttpServer())
+        .get('/rbac/grants')
+        .set('Cookie', secondAdminCookie)
+        .expect(200);
+
+      // The *first* admin revokes it, so this is not the self-lockout path.
+      await request(app.getHttpServer())
+        .delete(`/rbac/grants/${secondGrant.id}`)
+        .set('Cookie', adminCookie)
+        .expect(204);
+
+      // Same unexpired cookie, no re-login: the very next request is denied.
+      await request(app.getHttpServer())
+        .get('/rbac/grants')
+        .set('Cookie', secondAdminCookie)
+        .expect(403);
+    });
   });
 
   describe('self-lockout protection', () => {
