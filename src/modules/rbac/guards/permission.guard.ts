@@ -59,17 +59,15 @@ export class PermissionGuard implements CanActivate {
     );
 
     if (!allowed) {
-      if (required.permission === 'rbac') {
-        await this.rbacAuditService.record(
-          RbacAuditEventType.MANAGEMENT_ACCESS_DENIED,
-          RbacAuditOutcome.FAILURE,
-          {
-            actorUserId: user.id,
-            entityType: RbacAuditEntityType.CONFIG,
-            reason: `missing ${required.permission}:${required.action}`,
-          },
-        );
-      }
+      await this.rbacAuditService.record(
+        RbacAuditEventType.MANAGEMENT_ACCESS_DENIED,
+        RbacAuditOutcome.FAILURE,
+        {
+          actorUserId: user.id,
+          entityType: RbacAuditEntityType.CONFIG,
+          reason: `missing ${required.permission}:${required.action}`,
+        },
+      );
 
       throw new ForbiddenException('Insufficient permissions');
     }
