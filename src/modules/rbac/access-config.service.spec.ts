@@ -79,17 +79,43 @@ describe('AccessConfigService', () => {
     expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(false);
   });
 
-  it('allows a full-permission grant (no actions restriction) for every action', async () => {
+  it('allows every action a grant lists', async () => {
     roles = [roleAdmin];
     permissions = [permissionDocs];
     grants = [
-      { roleId: roleAdmin.id, permissionId: permissionDocs.id, actions: null },
+      {
+        roleId: roleAdmin.id,
+        permissionId: permissionDocs.id,
+        actions: ['read', 'write'],
+      },
     ];
 
     await service.onModuleInit();
 
     expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(true);
     expect(service.hasPermission(['admin'], 'docs', 'write')).toBe(true);
+  });
+
+  it('denies a grant whose action list is empty or unset', async () => {
+    roles = [roleAdmin];
+    permissions = [permissionDocs];
+    grants = [
+      {
+        roleId: roleAdmin.id,
+        permissionId: permissionDocs.id,
+        // The pre-migration shape: the column was nullable and a null read
+        // back as "all actions".
+        actions: null as unknown as string[],
+      },
+    ];
+
+    await service.onModuleInit();
+
+    // An unset list used to mean "every action", so widening `docs` with a new
+    // action silently handed that action to every open-ended grant. Grants now
+    // always enumerate what they allow, and anything left unset fails closed.
+    expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(false);
+    expect(service.hasPermission(['admin'], 'docs', 'write')).toBe(false);
   });
 
   it('allows only the scoped actions for an action-scoped grant', async () => {
@@ -132,7 +158,11 @@ describe('AccessConfigService', () => {
     roles = [roleAdmin];
     permissions = [permissionDocs];
     grants = [
-      { roleId: roleAdmin.id, permissionId: permissionDocs.id, actions: null },
+      {
+        roleId: roleAdmin.id,
+        permissionId: permissionDocs.id,
+        actions: ['read', 'write'],
+      },
     ];
 
     await service.onModuleInit();
@@ -144,7 +174,11 @@ describe('AccessConfigService', () => {
     roles = [roleAdmin];
     permissions = [permissionDocs];
     grants = [
-      { roleId: roleAdmin.id, permissionId: permissionDocs.id, actions: null },
+      {
+        roleId: roleAdmin.id,
+        permissionId: permissionDocs.id,
+        actions: ['read', 'write'],
+      },
     ];
 
     await service.onModuleInit();
@@ -171,7 +205,7 @@ describe('AccessConfigService', () => {
         {
           roleId: roleAdmin.id,
           permissionId: permissionDocs.id,
-          actions: null,
+          actions: ['read', 'write'],
         },
       ];
       await service.reload();
@@ -191,7 +225,7 @@ describe('AccessConfigService', () => {
         {
           roleId: roleAdmin.id,
           permissionId: permissionDocs.id,
-          actions: null,
+          actions: ['read', 'write'],
         },
       ];
 
@@ -219,7 +253,7 @@ describe('AccessConfigService', () => {
         {
           roleId: roleAdmin.id,
           permissionId: permissionDocs.id,
-          actions: null,
+          actions: ['read', 'write'],
         },
       ];
 

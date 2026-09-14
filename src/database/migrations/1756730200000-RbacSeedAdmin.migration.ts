@@ -21,7 +21,7 @@ export class RbacSeedAdmin1756730200000 implements MigrationInterface {
 
     await queryRunner.query(`
       INSERT INTO "grants" ("id", "role_id", "permission_id", "actions")
-      SELECT gen_random_uuid(), "roles"."id", "permissions"."id", NULL
+      SELECT gen_random_uuid(), "roles"."id", "permissions"."id", ARRAY['manage']
       FROM "roles", "permissions"
       WHERE "roles"."name" = 'admin' AND "permissions"."name" = 'rbac'
     `);

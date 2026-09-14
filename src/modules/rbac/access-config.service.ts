@@ -19,7 +19,7 @@ import { RbacAuditService } from './rbac-audit.service';
 
 interface AccessSnapshot {
   permissionNames: Set<string>;
-  grantsByRole: Map<string, Map<string, Set<string> | 'ALL'>>;
+  grantsByRole: Map<string, Map<string, Set<string>>>;
 }
 
 const EMPTY_SNAPSHOT: AccessSnapshot = {
@@ -89,7 +89,7 @@ export class AccessConfigService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      if (actions === 'ALL' || actions.has(action)) {
+      if (actions.has(action)) {
         return true;
       }
     }
@@ -190,7 +190,7 @@ export class AccessConfigService implements OnModuleInit, OnModuleDestroy {
     const permissionNames = new Set(
       permissions.map((permission) => permission.name),
     );
-    const grantsByRole = new Map<string, Map<string, Set<string> | 'ALL'>>();
+    const grantsByRole = new Map<string, Map<string, Set<string>>>();
 
     for (const grant of grants) {
       const role = roleById.get(grant.roleId);
@@ -205,13 +205,16 @@ export class AccessConfigService implements OnModuleInit, OnModuleDestroy {
         grantsByRole.set(role.name, roleGrants);
       }
 
+      // A grant allows exactly the actions it names. An unset or empty list is
+      // *not* a wildcard: treating it as "every action" meant that adding an
+      // action to a permission silently handed that action to every grant that
+      // had never enumerated one. Anything unnamed is denied.
       const permissionActionSet = new Set(permission.actions);
-      const grantActions =
-        !grant.actions || grant.actions.length === 0
-          ? 'ALL'
-          : new Set(
-              grant.actions.filter((action) => permissionActionSet.has(action)),
-            );
+      const grantActions = new Set(
+        (grant.actions ?? []).filter((action) =>
+          permissionActionSet.has(action),
+        ),
+      );
 
       roleGrants.set(permission.name, grantActions);
     }

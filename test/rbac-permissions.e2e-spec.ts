@@ -137,7 +137,7 @@ describe('RBAC Permissions CRUD (e2e)', () => {
       grantRepository.create({
         roleId: adminRole.id,
         permissionId: rbacPermission.id,
-        actions: null,
+        actions: ['manage'],
       }),
     );
     await userRoleRepository.save(
@@ -209,7 +209,7 @@ describe('RBAC Permissions CRUD (e2e)', () => {
       grantRepository.create({
         roleId: role.id,
         permissionId: permission.id,
-        actions: null,
+        actions: ['read'],
       }),
     );
 

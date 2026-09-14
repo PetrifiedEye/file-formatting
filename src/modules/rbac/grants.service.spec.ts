@@ -90,7 +90,7 @@ describe('GrantsService', () => {
     service = module.get(GrantsService);
   });
 
-  it('creates a grant with full actions when omitted', async () => {
+  it('materializes the permission actions when the grant omits them', async () => {
     roleRepository.findOne.mockResolvedValue(role);
     permissionRepository.findOne.mockResolvedValue(permission);
     grantRepository.findOne.mockResolvedValue(null);
@@ -100,22 +100,37 @@ describe('GrantsService', () => {
       permissionId: permission.id,
     });
 
-    expect(grant.actions).toBeNull();
+    // Recorded explicitly, not left open-ended: a later `write` added to the
+    // `docs` permission must not silently widen this grant.
+    expect(grant.actions).toEqual(['read', 'write']);
     expect(accessConfigService.reload).toHaveBeenCalled();
   });
 
-  it('creates a grant with full actions when actions is an empty array', async () => {
+  it('rejects an empty action list on create', async () => {
     roleRepository.findOne.mockResolvedValue(role);
     permissionRepository.findOne.mockResolvedValue(permission);
     grantRepository.findOne.mockResolvedValue(null);
 
-    const grant = await service.create({
-      roleId: role.id,
-      permissionId: permission.id,
-      actions: [],
-    });
+    await expect(
+      service.create({
+        roleId: role.id,
+        permissionId: permission.id,
+        actions: [],
+      }),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
 
-    expect(grant.actions).toBeNull();
+  it('rejects an empty action list on update', async () => {
+    grantRepository.findOne.mockResolvedValue({
+      id: 'grant-1',
+      permissionId: permission.id,
+      actions: ['read'],
+    });
+    permissionRepository.findOne.mockResolvedValue(permission);
+
+    await expect(
+      service.update('grant-1', { actions: [] }, 'admin-1'),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
   });
 
   it('creates a grant with a partial action subset', async () => {

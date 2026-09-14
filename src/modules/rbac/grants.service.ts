@@ -66,10 +66,11 @@ export class GrantsService {
     actorUserId?: string | null,
   ): Promise<Grant> {
     if (dto.actions !== undefined) {
+      this.assertActionsPresent(dto.actions);
       await this.selfLockoutService.assertRetainsControl(actorUserId, {
         kind: 'grant-actions',
         grantId: id,
-        actions: dto.actions.length > 0 ? dto.actions : null,
+        actions: dto.actions,
       });
     }
 
@@ -124,6 +125,9 @@ export class GrantsService {
       throw new NotFoundException(`Permission ${dto.permissionId} not found`);
     }
 
+    if (dto.actions !== undefined) {
+      this.assertActionsPresent(dto.actions);
+    }
     this.assertActionsSubset(dto.actions, permission.actions);
 
     const existing = await this.grantRepository.findOne({
@@ -139,7 +143,11 @@ export class GrantsService {
       this.grantRepository.create({
         roleId: dto.roleId,
         permissionId: dto.permissionId,
-        actions: dto.actions && dto.actions.length > 0 ? dto.actions : null,
+        // Omitting `actions` means "everything the permission allows *today*".
+        // It is recorded as an explicit list rather than left unset, so a later
+        // action added to the permission does not widen this grant behind the
+        // administrator's back.
+        actions: dto.actions ?? [...permission.actions],
       }),
     );
   }
@@ -161,8 +169,9 @@ export class GrantsService {
         );
       }
 
+      this.assertActionsPresent(dto.actions);
       this.assertActionsSubset(dto.actions, permission.actions);
-      grant.actions = dto.actions.length > 0 ? dto.actions : null;
+      grant.actions = dto.actions;
     }
 
     return this.grantRepository.save(grant);
@@ -179,6 +188,18 @@ export class GrantsService {
       entityType: RbacAuditEntityType.GRANT,
       entityId: grantId,
     });
+  }
+
+  /**
+   * An empty list used to be stored as `null` and read back as "every action",
+   * so `PATCH {actions: []}` widened a grant instead of emptying it — the exact
+   * opposite of what it reads like, and the opposite of `PermissionsService`,
+   * which has always rejected an empty list with 422.
+   */
+  private assertActionsPresent(actions: string[]): void {
+    if (actions.length === 0) {
+      throw new UnprocessableEntityException('actions must be non-empty');
+    }
   }
 
   private assertActionsSubset(
