@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 
+import { ConfigService } from '@/core/config/config.service';
+
 import { AccessConfigService } from './access-config.service';
 import { Grant } from './entities/grant.entity';
 import { Permission } from './entities/permission.entity';
@@ -24,6 +26,8 @@ describe('AccessConfigService', () => {
   };
   const grantRepository = { find: jest.fn(() => Promise.resolve(grants)) };
   const rbacAuditService = { record: jest.fn().mockResolvedValue(undefined) };
+  // 0 = no background refresh; the refresh has its own test below.
+  const configService = { get: jest.fn().mockReturnValue(0) };
 
   const roleAdmin: Role = {
     id: 'role-admin',
@@ -64,6 +68,7 @@ describe('AccessConfigService', () => {
         },
         { provide: getRepositoryToken(Grant), useValue: grantRepository },
         { provide: RbacAuditService, useValue: rbacAuditService },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -288,6 +293,62 @@ describe('AccessConfigService', () => {
 
       expect(service.hasPermission(['admin'], 'docs', 'write')).toBe(false);
       expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(true);
+    });
+  });
+
+  describe('periodic refresh', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('picks up a change made by another process', async () => {
+      jest.useFakeTimers();
+      configService.get.mockReturnValue(1000);
+      roles = [roleAdmin];
+      permissions = [permissionDocs];
+      grants = [
+        {
+          roleId: roleAdmin.id,
+          permissionId: permissionDocs.id,
+          actions: ['read'],
+        },
+      ];
+
+      await service.onModuleInit();
+      expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(true);
+
+      // Another replica revokes the grant. This process is never told, so
+      // without the refresh it would honour it for the life of the process.
+      grants = [];
+
+      await jest.advanceTimersByTimeAsync(1000);
+
+      expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(false);
+    });
+
+    it('keeps the working snapshot when a refresh fails', async () => {
+      jest.useFakeTimers();
+      configService.get.mockReturnValue(1000);
+      roles = [roleAdmin];
+      permissions = [permissionDocs];
+      grants = [
+        {
+          roleId: roleAdmin.id,
+          permissionId: permissionDocs.id,
+          actions: ['read'],
+        },
+      ];
+
+      await service.onModuleInit();
+
+      // A background refresh is opportunistic: a database blip must not take
+      // authorization down, unlike `reload()` after a committed mutation.
+      roleRepository.find.mockRejectedValueOnce(new Error('db unavailable'));
+
+      await jest.advanceTimersByTimeAsync(1000);
+
+      expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(true);
+      expect(service.isStale()).toBe(false);
     });
   });
 });

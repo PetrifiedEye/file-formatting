@@ -34,6 +34,14 @@ export const configValidationSchema = Joi.object<Config>({
   THROTTLE_GLOBAL_LIMIT: Joi.number().optional().default(10),
 
   /**
+   * How often each process rebuilds its in-memory RBAC snapshot from the
+   * database, bounding how long a grant changed on another replica keeps being
+   * honoured here. 0 disables the refresh (single-instance deployments, where
+   * the post-mutation reload is already synchronous).
+   */
+  RBAC_SNAPSHOT_REFRESH_MS: Joi.number().min(0).optional().default(30000),
+
+  /**
    * PostgreSQL database options
    */
   POSTGRES_HOST: Joi.string().hostname().required(),

@@ -7,6 +7,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { ConfigService } from '@/core/config/config.service';
+
 import { Grant } from './entities/grant.entity';
 import { Permission } from './entities/permission.entity';
 import {
@@ -47,6 +49,8 @@ export class AccessConfigService implements OnModuleInit, OnModuleDestroy {
   private retryTimer: NodeJS.Timeout | null = null;
   private retryDelayMs = RETRY_BASE_DELAY_MS;
 
+  private refreshTimer: NodeJS.Timeout | null = null;
+
   constructor(
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
@@ -55,14 +59,67 @@ export class AccessConfigService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(Grant)
     private readonly grantRepository: Repository<Grant>,
     private readonly rbacAuditService: RbacAuditService,
+    private readonly configService: ConfigService,
   ) {}
 
   async onModuleInit(): Promise<void> {
     this.snapshot = await this.buildSnapshot();
+    this.startPeriodicRefresh();
   }
 
   onModuleDestroy(): void {
     this.cancelRetry();
+    this.cancelPeriodicRefresh();
+  }
+
+  /**
+   * A mutation reloads the snapshot in the process that served it — and only
+   * there. Behind a load balancer, a grant revoked on replica A went on being
+   * honoured by replica B for the life of that process. Rebuilding on a timer
+   * bounds that window to the interval without needing a broker the stack does
+   * not have (`specs/002-rbac/research.md` deferred LISTEN/NOTIFY for exactly
+   * that reason).
+   */
+  private startPeriodicRefresh(): void {
+    const intervalMs = Number(
+      this.configService.get('RBAC_SNAPSHOT_REFRESH_MS'),
+    );
+
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+      return;
+    }
+
+    this.refreshTimer = setInterval(() => {
+      void this.refresh();
+    }, intervalMs);
+    this.refreshTimer.unref?.();
+  }
+
+  private cancelPeriodicRefresh(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+  }
+
+  /**
+   * The quiet sibling of `reload()`: no audit row, because nothing happened
+   * that anyone asked for, and no fail-closed on error. `reload()` denies
+   * everything when it fails because the snapshot it holds is known to be
+   * wrong — a mutation just committed. Here the snapshot is merely possibly
+   * stale, so a transient database blip must not take authorization down.
+   */
+  private async refresh(): Promise<void> {
+    try {
+      this.snapshot = await this.buildSnapshot();
+      this.stale = false;
+    } catch (error) {
+      this.logger.warn(
+        `Periodic RBAC snapshot refresh failed; keeping the current snapshot: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
   }
 
   hasPermission(
