@@ -23,6 +23,11 @@ export const configValidationSchema = Joi.object<Config>({
   HEALTH_CHECK_ENABLED: Joi.boolean().optional().default(false),
 
   /**
+   * Reverse proxy (consumed in main.ts before the DI container exists)
+   */
+  TRUST_PROXY: Joi.string().allow('').optional().default('false'),
+
+  /**
    * Throttler options
    */
   THROTTLE_GLOBAL_TTL: Joi.number().optional().default(10000),
