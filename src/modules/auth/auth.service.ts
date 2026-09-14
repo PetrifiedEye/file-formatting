@@ -400,7 +400,12 @@ export class AuthService {
     const user = await this.usersService.findById(sub);
 
     if (!user) {
-      await this.recordRefreshFailure(sub, meta, 'user_not_found');
+      // No `userId` here: login_audit_events.user_id is an FK to users, and
+      // the whole point of this branch is that the row is gone. The subject
+      // is kept in metadata so the attempt is still traceable.
+      await this.recordRefreshFailure(undefined, meta, 'user_not_found', {
+        subject: sub,
+      });
       throw new UnauthorizedException(REFRESH_FAILURE_MESSAGE);
     }
 
@@ -439,6 +444,7 @@ export class AuthService {
     userId: string | undefined,
     meta: RequestMeta,
     failureReason: string,
+    metadata?: Record<string, unknown>,
   ): Promise<void> {
     await this.loginAuditService.record(
       LoginAuditEventType.TOKEN_REFRESH_ATTEMPT,
@@ -449,6 +455,7 @@ export class AuthService {
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
         failureReason,
+        metadata,
       },
     );
   }
