@@ -130,6 +130,17 @@ export class AuthService {
     const normalizedEmail = normalizeEmail(dto.email);
     const user = await this.usersService.findByNormalizedEmail(normalizedEmail);
 
+    const passwordValid = user
+      ? await verifyPassword(dto.password, user.passwordHash)
+      : false;
+
+    // The lockout state is only disclosed to a caller who has proven they own
+    // the account. Answering 423 before the password is checked turned the
+    // status code into an oracle: 423 meant "registered and locked" while an
+    // unknown email got 401, so an attacker could enumerate addresses and read
+    // the lock state of any of them without ever knowing a password.
+    // The locked account is also never charged a failed attempt here, so a
+    // wrong password cannot be used to extend somebody else's lockout.
     if (user && this.usersService.isLockedOut(user)) {
       await this.loginAuditService.record(
         LoginAuditEventType.LOGIN_ATTEMPT,
@@ -142,12 +153,13 @@ export class AuthService {
           failureReason: 'locked_out',
         },
       );
+
+      if (!passwordValid) {
+        throw new UnauthorizedException(GENERIC_LOGIN_FAILURE);
+      }
+
       throw new HttpException({ message: LOCKOUT_MESSAGE }, HttpStatus.LOCKED);
     }
-
-    const passwordValid = user
-      ? await verifyPassword(dto.password, user.passwordHash)
-      : false;
 
     if (!user || !passwordValid) {
       if (user) {

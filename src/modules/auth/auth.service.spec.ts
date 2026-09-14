@@ -471,7 +471,35 @@ describe('AuthService', () => {
       passwordHash = await hashPassword('CorrectHorse123!');
     });
 
-    it('rejects with 423 when the account is locked, without checking the password', async () => {
+    it('rejects a locked account with a generic 401 when the password is wrong', async () => {
+      const user = {
+        id: 'user-1',
+        email: 'user@example.com',
+        passwordHash,
+        status: UserStatus.ACTIVE,
+        lockedUntil: new Date(Date.now() + 60000),
+      };
+      usersService.findByNormalizedEmail.mockResolvedValue(user);
+      usersService.isLockedOut.mockReturnValueOnce(true);
+
+      await expect(
+        service.login(
+          { email: 'user@example.com', password: 'wrong-password' },
+          {},
+        ),
+      ).rejects.toThrow(UnauthorizedException);
+
+      // The lock must not be extended by an attacker who cannot supply the
+      // password, otherwise the 401 path becomes a denial-of-service lever.
+      expect(usersService.recordFailedLogin).not.toHaveBeenCalled();
+      expect(loginAuditService.record).toHaveBeenCalledWith(
+        LoginAuditEventType.LOGIN_ATTEMPT,
+        LoginAuditOutcome.LOCKED_OUT,
+        expect.objectContaining({ failureReason: 'locked_out' }),
+      );
+    });
+
+    it('rejects with 423 when the account is locked and the password is correct', async () => {
       const user = {
         id: 'user-1',
         email: 'user@example.com',
