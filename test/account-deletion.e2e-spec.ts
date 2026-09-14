@@ -31,6 +31,7 @@ import { Grant } from '../src/modules/rbac/entities/grant.entity';
 import { Permission } from '../src/modules/rbac/entities/permission.entity';
 import { Role } from '../src/modules/rbac/entities/role.entity';
 import { UserRole } from '../src/modules/rbac/entities/user-role.entity';
+import { SystemSettings } from '../src/modules/settings/entities/system-settings.entity';
 import { AuthSession } from '../src/modules/auth/entities/auth-session.entity';
 import { PasswordResetChallenge } from '../src/modules/auth/entities/password-reset-challenge.entity';
 import { EmailChangeChallenge } from '../src/modules/users/entities/email-change-challenge.entity';
@@ -88,6 +89,7 @@ describe('Account Deletion (e2e)', () => {
   let auditRepository: Repository<AccountDeletionAuditEvent>;
   let loginAuditRepository: Repository<LoginAuditEvent>;
   let sessionRepository: Repository<AuthSession>;
+  let settingsRepository: Repository<SystemSettings>;
   let passwordResetRepository: Repository<PasswordResetChallenge>;
   let emailChangeRepository: Repository<EmailChangeChallenge>;
   let accessConfigService: AccessConfigService;
@@ -159,6 +161,7 @@ describe('Account Deletion (e2e)', () => {
       getRepositoryToken(LoginAuditEvent),
     );
     sessionRepository = moduleFixture.get(getRepositoryToken(AuthSession));
+    settingsRepository = moduleFixture.get(getRepositoryToken(SystemSettings));
     passwordResetRepository = moduleFixture.get(
       getRepositoryToken(PasswordResetChallenge),
     );
@@ -558,6 +561,127 @@ describe('Account Deletion (e2e)', () => {
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
+    });
+  });
+
+  describe('Scenario 14 — the freed email is re-registrable, with a clean slate', () => {
+    let savedSettings: SystemSettings;
+
+    beforeEach(async () => {
+      // Register straight to active so the new account can be inspected
+      // without going through a confirmation challenge. Settings are a single
+      // global row, so the previous values are restored afterwards rather than
+      // left for whichever suite runs next.
+      savedSettings = await settingsRepository.findOneOrFail({
+        where: { id: 1 },
+      });
+      await settingsRepository.update(1, {
+        registrationConfirmationEnabled: false,
+        signInConfirmationEnabled: false,
+      });
+    });
+
+    afterEach(async () => {
+      await settingsRepository.update(1, {
+        registrationConfirmationEnabled:
+          savedSettings.registrationConfirmationEnabled,
+        signInConfirmationEnabled: savedSettings.signInConfirmationEnabled,
+      });
+    });
+
+    it('lets the address be claimed again, carrying nothing over from the old account', async () => {
+      const freedEmail = selfUser.email;
+      const oldId = selfUser.id;
+
+      // Give the old account a role and some audit history worth not
+      // inheriting.
+      const role = await roleRepository.save(
+        roleRepository.create({
+          name: `legacy-${Date.now()}-${Math.random()}`,
+        }),
+      );
+      await userRoleRepository.save(
+        userRoleRepository.create({ userId: oldId, roleId: role.id }),
+      );
+      expect(
+        await loginAuditRepository.countBy({ userId: oldId }),
+      ).toBeGreaterThan(0);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .delete(`/users/${oldId}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ email: freedEmail, password: TEST_PASSWORD })
+        .expect(201);
+
+      const reborn = await userRepository.findOneOrFail({
+        where: { email: freedEmail },
+      });
+
+      // A genuinely new row, not a resurrected one.
+      expect(reborn.id).not.toBe(oldId);
+      expect(reborn.photoUrl).toBeNull();
+      expect(reborn.deletionStartedAt).toBeNull();
+
+      // No roles inherited: the old membership went with the old row, and
+      // nothing re-attached it by email.
+      expect(await userRoleRepository.countBy({ userId: reborn.id })).toBe(0);
+
+      // No audit linkage either — the old rows were detached by the FK's
+      // SET NULL, not re-pointed at whoever takes the address next.
+      expect(await loginAuditRepository.countBy({ userId: oldId })).toBe(0);
+      const auditForReborn = await loginAuditRepository.countBy({
+        userId: reborn.id,
+      });
+      expect(auditForReborn).toBe(0);
+
+      expect(await auditRepository.countBy({ targetId: reborn.id })).toBe(0);
+    });
+
+    it('lets the re-registered account sign in with its own new password', async () => {
+      const freedEmail = selfUser.email;
+      const newPassword = 'DifferentHorse456!';
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .delete(`/users/${selfUser.id}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ email: freedEmail, password: newPassword })
+        .expect(201);
+
+      // The old credentials must not work against the new account.
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: freedEmail, password: TEST_PASSWORD })
+        .expect(401);
+
+      clearThrottler();
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: freedEmail, password: newPassword })
+        .expect(200);
+
+      const cookie = extractSessionCookie(
+        login.headers['set-cookie'] as unknown as string[],
+      );
+      const session = await request(app.getHttpServer())
+        .get('/auth/session')
+        .set('Cookie', cookie)
+        .expect(200);
+
+      expect(session.body.id).not.toBe(selfUser.id);
+      expect(session.body.roles).toEqual([]);
     });
   });
 
