@@ -17,7 +17,6 @@ import { EmailChangeChallenge } from './entities/email-change-challenge.entity';
 import { User } from './entities/user.entity';
 import { EmailChangeService } from './email-change.service';
 import { ProfileAuditService } from './profile-audit.service';
-import { UsersService } from './users.service';
 
 describe('EmailChangeService', () => {
   let service: EmailChangeService;
@@ -27,7 +26,6 @@ describe('EmailChangeService', () => {
     save: jest.Mock;
   };
   let usersRepository: { findOne: jest.Mock; save: jest.Mock };
-  let usersService: { findById: jest.Mock };
   let confirmationMailService: { sendEmailChangeConfirmation: jest.Mock };
   let profileAuditService: { record: jest.Mock };
 
@@ -56,7 +54,6 @@ describe('EmailChangeService', () => {
       findOne: jest.fn().mockResolvedValue(null),
       save: jest.fn((u: Partial<User>) => Promise.resolve(u)),
     };
-    usersService = { findById: jest.fn() };
     confirmationMailService = {
       sendEmailChangeConfirmation: jest.fn().mockResolvedValue(undefined),
     };
@@ -70,7 +67,6 @@ describe('EmailChangeService', () => {
           useValue: challengeRepository,
         },
         { provide: getRepositoryToken(User), useValue: usersRepository },
-        { provide: UsersService, useValue: usersService },
         {
           provide: ConfirmationMailService,
           useValue: confirmationMailService,

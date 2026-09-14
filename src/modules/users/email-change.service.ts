@@ -24,7 +24,6 @@ import {
 } from './entities/profile-audit-event.entity';
 import { User } from './entities/user.entity';
 import { ProfileAuditService } from './profile-audit.service';
-import { UsersService } from './users.service';
 
 const GENERIC_CONFIRM_FAILURE =
   'Unable to confirm email change. Please check your code or request a new one.';
@@ -36,7 +35,6 @@ export class EmailChangeService {
     private readonly challengeRepository: Repository<EmailChangeChallenge>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
-    private readonly usersService: UsersService,
     private readonly confirmationMailService: ConfirmationMailService,
     private readonly profileAuditService: ProfileAuditService,
   ) {}
