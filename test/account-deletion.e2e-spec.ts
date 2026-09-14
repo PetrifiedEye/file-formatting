@@ -51,6 +51,19 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
   return cookie.split(';')[0];
 }
 
+function extractCookie(
+  setCookieHeader: string[] | undefined,
+  name: string,
+): string {
+  const cookie = (setCookieHeader ?? []).find((value) =>
+    value.startsWith(`${name}=`),
+  );
+  if (!cookie) {
+    throw new Error(`No ${name} cookie found in response`);
+  }
+  return cookie.split(';')[0];
+}
+
 function bruteForceOtp(otpHash: string): string {
   for (let i = 100000; i < 1000000; i++) {
     const code = i.toString();
@@ -532,6 +545,108 @@ describe('Account Deletion (e2e)', () => {
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
+    });
+  });
+
+  describe('Scenario 12 — a deleted account cannot keep using its live cookies', () => {
+    it('rejects the still-unexpired access cookie of a self-deleted user', async () => {
+      const profileBefore = await request(app.getHttpServer())
+        .get(`/users/${selfUser.id}`)
+        .set('Cookie', selfCookie)
+        .expect(200);
+      expect(profileBefore.body.id).toBe(selfUser.id);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/delete')
+        .set('Cookie', selfCookie)
+        .expect(202);
+
+      const challenge = await challengeRepository.findOne({
+        where: { userId: selfUser.id },
+      });
+      const otp = bruteForceOtp(challenge!.otpHash);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/delete/confirm')
+        .set('Cookie', selfCookie)
+        .send({ code: otp })
+        .expect(200);
+
+      // Same cookie, unchanged and nowhere near its expiry. The JWT still
+      // verifies; only the server-side user lookup can reject it.
+      clearThrottler();
+      await request(app.getHttpServer())
+        .get(`/users/${selfUser.id}`)
+        .set('Cookie', selfCookie)
+        .expect(401);
+    });
+
+    it('rejects the live access and refresh cookies of an admin-deleted user', async () => {
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: otherUser.email, password: TEST_PASSWORD })
+        .expect(200);
+      const setCookie = login.headers['set-cookie'] as unknown as string[];
+      const access = extractCookie(setCookie, 'access_token');
+      const refresh = extractCookie(setCookie, 'refresh_token');
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .get(`/users/${otherUser.id}`)
+        .set('Cookie', access)
+        .expect(200);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .delete(`/users/${otherUser.id}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .get(`/users/${otherUser.id}`)
+        .set('Cookie', access)
+        .expect(401);
+
+      // The refresh token must not mint a fresh pair either, or deletion
+      // would only hold for the access token's short lifetime.
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', refresh)
+        .expect(401);
+    });
+
+    it('does not let a deleted user reach an endpoint their id no longer owns', async () => {
+      const login = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: otherUser.email, password: TEST_PASSWORD })
+        .expect(200);
+      const access = extractCookie(
+        login.headers['set-cookie'] as unknown as string[],
+        'access_token',
+      );
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .delete(`/users/${otherUser.id}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      // Any authenticated route, not just the one keyed by the deleted id.
+      clearThrottler();
+      await request(app.getHttpServer())
+        .post('/users/me/delete')
+        .set('Cookie', access)
+        .expect(401);
+
+      clearThrottler();
+      await request(app.getHttpServer())
+        .get('/auth/session')
+        .set('Cookie', access)
+        .expect(401);
     });
   });
 
