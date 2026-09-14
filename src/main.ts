@@ -35,12 +35,48 @@ function parseCorsOrigins(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Fastify only honours `X-Forwarded-*` when `trustProxy` is set, and it has to
+ * be set on the adapter (before the app exists), so it is read straight from
+ * the environment rather than through `ConfigService`.
+ *
+ * Without it every request behind a reverse proxy reports the proxy's address:
+ * `@Throttle` buckets all clients together and audit rows record one IP.
+ *
+ * Accepted values: `false` (default, direct exposure), `true` (trust the whole
+ * chain), a hop count (`1` = one proxy in front), or a comma-separated list of
+ * trusted proxy addresses/CIDRs.
+ */
+function parseTrustProxy(raw: string | undefined): boolean | number | string[] {
+  const value = raw?.trim();
+
+  if (!value || value === 'false') {
+    return false;
+  }
+
+  if (value === 'true') {
+    return true;
+  }
+
+  const hops = Number(value);
+  if (Number.isInteger(hops) && hops > 0) {
+    return hops;
+  }
+
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 async function bootstrap() {
   initializeTransactionalContext({ storageDriver: StorageDriver.AUTO });
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter(),
+    new FastifyAdapter({
+      trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+    }),
   );
 
   await app.register(compression);
@@ -78,8 +114,9 @@ async function bootstrap() {
     prefix: '/assets/',
   });
 
+  // Swagger describes every auth and admin surface; it stays out of production.
   const nodeEnv = configService.get('NODE_ENV');
-  if (nodeEnv === 'development' || nodeEnv === 'production') {
+  if (nodeEnv === 'development') {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('File Formatting API — User Registration')
       .setDescription('Registration and email-confirmation endpoints')
@@ -90,9 +127,13 @@ async function bootstrap() {
     SwaggerModule.setup('api/docs', app, document);
   }
 
+  app.enableShutdownHooks();
+
   const port = configService.get('PORT');
 
-  await app.listen(port);
+  // Bind on all interfaces: the Node default of 127.0.0.1 is unreachable from
+  // outside a container even when the port is published.
+  await app.listen(port, '0.0.0.0');
 }
 
 void bootstrap();

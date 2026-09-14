@@ -19,6 +19,14 @@ export interface Config {
   HEALTH_CHECK_ENABLED?: boolean;
 
   /**
+   * Reverse proxy. Read directly from `process.env` in `main.ts` (the Fastify
+   * adapter needs it before the DI container exists); declared here so the
+   * validation schema documents and accepts it.
+   * `false` | `true` | hop count | comma-separated trusted addresses.
+   */
+  TRUST_PROXY?: string;
+
+  /**
    * Throttler options
    */
   THROTTLE_GLOBAL_TTL?: number;
