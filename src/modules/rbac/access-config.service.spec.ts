@@ -326,6 +326,24 @@ describe('AccessConfigService', () => {
       expect(service.hasPermission(['admin'], 'docs', 'read')).toBe(false);
     });
 
+    it('stops refreshing once the module is destroyed', async () => {
+      jest.useFakeTimers();
+      configService.get.mockReturnValue(1000);
+      roles = [roleAdmin];
+      permissions = [permissionDocs];
+      grants = [];
+
+      await service.onModuleInit();
+      service.onModuleDestroy();
+      const callsAtShutdown = roleRepository.find.mock.calls.length;
+
+      await jest.advanceTimersByTimeAsync(5000);
+
+      // A leaked interval would keep querying for the life of the process —
+      // once per app, which adds up anywhere many are started and stopped.
+      expect(roleRepository.find.mock.calls.length).toBe(callsAtShutdown);
+    });
+
     it('keeps the working snapshot when a refresh fails', async () => {
       jest.useFakeTimers();
       configService.get.mockReturnValue(1000);
