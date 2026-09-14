@@ -50,6 +50,8 @@ describe('RBAC Roles CRUD (e2e)', () => {
 
   let adminCookie: string;
   let nonAdminCookie: string;
+  let adminRoleName: string;
+  let adminUserId: string;
 
   beforeAll(async () => {
     initializeTransactionalContext({ storageDriver: StorageDriver.AUTO });
@@ -124,8 +126,10 @@ describe('RBAC Roles CRUD (e2e)', () => {
       }),
     );
 
+    adminUserId = adminUser.id;
+    adminRoleName = `admin-${Date.now()}-${Math.random()}`;
     const adminRole = await roleRepository.save(
-      roleRepository.create({ name: `admin-${Date.now()}-${Math.random()}` }),
+      roleRepository.create({ name: adminRoleName }),
     );
     const rbacPermission = await permissionRepository.save(
       permissionRepository.create({
@@ -193,6 +197,110 @@ describe('RBAC Roles CRUD (e2e)', () => {
       .send({ description: 'updated' })
       .expect(200);
     expect(updateResponse.body.description).toBe('updated');
+  });
+
+  describe('role membership', () => {
+    it('assigns, lists and revokes a membership, and the change reaches the next request', async () => {
+      const passwordHash = await hashPassword(TEST_PASSWORD);
+      const member = await userRepository.save(
+        userRepository.create({
+          email: `member-${Date.now()}-${Math.random()}@example.com`,
+          passwordHash,
+          status: UserStatus.ACTIVE,
+          confirmedAt: new Date(),
+        }),
+      );
+
+      const memberLogin = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: member.email, password: TEST_PASSWORD })
+        .expect(200);
+      const memberCookie = extractSessionCookie(
+        memberLogin.headers['set-cookie'] as unknown as string[],
+      );
+
+      // Without a role the member cannot reach RBAC management at all.
+      await request(app.getHttpServer())
+        .get('/rbac/roles')
+        .set('Cookie', memberCookie)
+        .expect(403);
+
+      const adminRole = await roleRepository.findOneOrFail({
+        where: { name: adminRoleName },
+      });
+
+      await request(app.getHttpServer())
+        .put(`/rbac/roles/${adminRole.id}/members/${member.id}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      const members = await request(app.getHttpServer())
+        .get(`/rbac/roles/${adminRole.id}/members`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+      expect(
+        members.body.some((m: { userId: string }) => m.userId === member.id),
+      ).toBe(true);
+
+      await request(app.getHttpServer())
+        .get('/rbac/roles')
+        .set('Cookie', memberCookie)
+        .expect(200);
+
+      // Idempotent: a repeat assignment is not an error.
+      await request(app.getHttpServer())
+        .put(`/rbac/roles/${adminRole.id}/members/${member.id}`)
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .delete(`/rbac/roles/${adminRole.id}/members/${member.id}`)
+        .set('Cookie', adminCookie)
+        .expect(204);
+
+      await request(app.getHttpServer())
+        .get('/rbac/roles')
+        .set('Cookie', memberCookie)
+        .expect(403);
+    });
+
+    it('refuses a self-revocation that would strip the caller own rbac:manage', async () => {
+      const adminRole = await roleRepository.findOneOrFail({
+        where: { name: adminRoleName },
+      });
+
+      await request(app.getHttpServer())
+        .delete(`/rbac/roles/${adminRole.id}/members/${adminUserId}`)
+        .set('Cookie', adminCookie)
+        .expect(409);
+    });
+
+    it('rejects a malformed role or user id with 400', async () => {
+      const adminRole = await roleRepository.findOneOrFail({
+        where: { name: adminRoleName },
+      });
+
+      await request(app.getHttpServer())
+        .get('/rbac/roles/not-a-uuid/members')
+        .set('Cookie', adminCookie)
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .put(`/rbac/roles/${adminRole.id}/members/not-a-uuid`)
+        .set('Cookie', adminCookie)
+        .expect(400);
+    });
+
+    it('denies membership management to a caller without rbac:manage', async () => {
+      const adminRole = await roleRepository.findOneOrFail({
+        where: { name: adminRoleName },
+      });
+
+      await request(app.getHttpServer())
+        .put(`/rbac/roles/${adminRole.id}/members/${adminUserId}`)
+        .set('Cookie', nonAdminCookie)
+        .expect(403);
+    });
   });
 
   it('blocks deleting a role referenced by a grant, then allows after removing it', async () => {

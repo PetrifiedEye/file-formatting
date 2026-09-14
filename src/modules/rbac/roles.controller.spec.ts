@@ -17,6 +17,7 @@ import {
 import { PermissionGuard } from './guards/permission.guard';
 import { RbacAuditService } from './rbac-audit.service';
 import { RolesController } from './roles.controller';
+import { RoleMembershipService } from './role-membership.service';
 import { RolesService } from './roles.service';
 
 describe('RolesController', () => {
@@ -28,6 +29,11 @@ describe('RolesController', () => {
     update: jest.fn(),
     delete: jest.fn(),
   };
+  const membershipService = {
+    list: jest.fn(),
+    assign: jest.fn(),
+    revoke: jest.fn(),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -36,6 +42,7 @@ describe('RolesController', () => {
       controllers: [RolesController],
       providers: [
         { provide: RolesService, useValue: rolesService },
+        { provide: RoleMembershipService, useValue: membershipService },
         JwtAuthGuard,
         { provide: TokenService, useValue: { verifyAccessToken: jest.fn() } },
         { provide: LoginAuditService, useValue: { record: jest.fn() } },
@@ -113,6 +120,29 @@ describe('RolesController', () => {
       'role-1',
       { name: 'editor-2' },
       null,
+    );
+  });
+
+  it('delegates the membership routes to the membership service', async () => {
+    const actor = { id: 'actor-1', roles: [] };
+    const roleId = '11111111-1111-4111-8111-111111111111';
+    const userId = '22222222-2222-4222-8222-222222222222';
+
+    await controller.listMembers(roleId);
+    expect(membershipService.list).toHaveBeenCalledWith(roleId);
+
+    await controller.assignMember(roleId, userId, { user: actor });
+    expect(membershipService.assign).toHaveBeenCalledWith(
+      roleId,
+      userId,
+      actor.id,
+    );
+
+    await controller.revokeMember(roleId, userId, { user: actor });
+    expect(membershipService.revoke).toHaveBeenCalledWith(
+      roleId,
+      userId,
+      actor.id,
     );
   });
 
