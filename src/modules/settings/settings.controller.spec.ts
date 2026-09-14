@@ -42,7 +42,7 @@ describe('SettingsController', () => {
     expect(result.registrationConfirmationEnabled).toBe(false);
   });
 
-  it('updates confirmation policy', async () => {
+  it('passes the body and the calling actor through to the service', async () => {
     settingsService.updateConfirmationPolicy.mockResolvedValue({
       registrationConfirmationEnabled: true,
       passwordRecoveryConfirmationEnabled: false,
@@ -53,10 +53,29 @@ describe('SettingsController', () => {
       passwordRequireSpecial: false,
     });
 
-    const result = await controller.updateConfirmationPolicy({
-      registrationConfirmationEnabled: true,
-    });
+    const result = await controller.updateConfirmationPolicy(
+      { registrationConfirmationEnabled: true },
+      {
+        user: { id: 'admin-1' },
+        ip: '10.0.0.9',
+        headers: { 'user-agent': 'jest' },
+      },
+    );
 
     expect(result.registrationConfirmationEnabled).toBe(true);
+    // Without the actor the audit trail cannot say who changed the policy.
+    expect(settingsService.updateConfirmationPolicy).toHaveBeenCalledWith(
+      { registrationConfirmationEnabled: true },
+      { actorUserId: 'admin-1', ipAddress: '10.0.0.9', userAgent: 'jest' },
+    );
+  });
+
+  it('is guarded by AdminGuard', () => {
+    const guards = Reflect.getMetadata(
+      '__guards__',
+      SettingsController,
+    ) as unknown[];
+
+    expect(guards).toEqual(expect.arrayContaining([AdminGuard]));
   });
 });

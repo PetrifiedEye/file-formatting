@@ -26,8 +26,11 @@ import {
 } from '../src/modules/auth/entities/registration-audit-event.entity';
 import { SystemSettings } from '../src/modules/settings/entities/system-settings.entity';
 import { ConfirmationChallenge } from '../src/modules/auth/entities/confirmation-challenge.entity';
+import { Grant } from '../src/modules/rbac/entities/grant.entity';
+import { Permission } from '../src/modules/rbac/entities/permission.entity';
 import { Role } from '../src/modules/rbac/entities/role.entity';
 import { UserRole } from '../src/modules/rbac/entities/user-role.entity';
+import { AccessConfigService } from '../src/modules/rbac/access-config.service';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
 
 const ADMIN_PASSWORD = 'CorrectHorse123!';
@@ -49,7 +52,10 @@ describe('Auth Registration (e2e)', () => {
   let settingsRepository: Repository<SystemSettings>;
   let challengeRepository: Repository<ConfirmationChallenge>;
   let roleRepository: Repository<Role>;
+  let permissionRepository: Repository<Permission>;
+  let grantRepository: Repository<Grant>;
   let userRoleRepository: Repository<UserRole>;
+  let accessConfigService: AccessConfigService;
   let throttlerStorage: ThrottlerStorageService;
   let adminCookie: string;
 
@@ -86,7 +92,10 @@ describe('Auth Registration (e2e)', () => {
       getRepositoryToken(ConfirmationChallenge),
     );
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
+    permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
+    grantRepository = moduleFixture.get(getRepositoryToken(Grant));
     userRoleRepository = moduleFixture.get(getRepositoryToken(UserRole));
+    accessConfigService = moduleFixture.get(AccessConfigService);
     throttlerStorage = moduleFixture.get<ThrottlerStorage>(
       ThrottlerStorage,
     ) as ThrottlerStorageService;
@@ -139,6 +148,36 @@ describe('Auth Registration (e2e)', () => {
     await userRoleRepository.save(
       userRoleRepository.create({ userId: adminUser.id, roleId: adminRole.id }),
     );
+
+    // `/admin/settings` is authorized through the grant model, so the admin
+    // role needs `settings:manage` — upserted for the same reason the role is,
+    // then published to the in-memory snapshot the guard reads.
+    let settingsPermission = await permissionRepository.findOne({
+      where: { name: 'settings' },
+    });
+    if (!settingsPermission) {
+      settingsPermission = await permissionRepository.save(
+        permissionRepository.create({
+          name: 'settings',
+          description:
+            'Read and change global confirmation and password policy',
+          actions: ['manage'],
+        }),
+      );
+    }
+    const settingsGrant = await grantRepository.findOne({
+      where: { roleId: adminRole.id, permissionId: settingsPermission.id },
+    });
+    if (!settingsGrant) {
+      await grantRepository.save(
+        grantRepository.create({
+          roleId: adminRole.id,
+          permissionId: settingsPermission.id,
+          actions: ['manage'],
+        }),
+      );
+    }
+    await accessConfigService.reload();
 
     const adminLogin = await request(app.getHttpServer())
       .post('/auth/login')
