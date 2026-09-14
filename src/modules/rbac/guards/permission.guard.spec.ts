@@ -116,7 +116,7 @@ describe('PermissionGuard', () => {
     );
   });
 
-  it('does not record an audit event for ordinary (non-rbac) denied checks', async () => {
+  it('records the denial for any permission, naming it in the reason', async () => {
     jest
       .spyOn(reflector, 'getAllAndOverride')
       .mockReturnValue({ permission: 'docs', action: 'read' });
@@ -125,6 +125,26 @@ describe('PermissionGuard', () => {
     await expect(
       guard.canActivate(buildContext({ id: 'user-1', roles: ['viewer'] })),
     ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(rbacAuditService.record).toHaveBeenCalledWith(
+      RbacAuditEventType.MANAGEMENT_ACCESS_DENIED,
+      RbacAuditOutcome.FAILURE,
+      expect.objectContaining({
+        actorUserId: 'user-1',
+        reason: 'missing docs:read',
+      }),
+    );
+  });
+
+  it('records nothing when the check passes', async () => {
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue({ permission: 'rbac', action: 'manage' });
+    accessConfigService.hasPermission.mockReturnValue(true);
+
+    await expect(
+      guard.canActivate(buildContext({ id: 'user-1', roles: ['admin'] })),
+    ).resolves.toBe(true);
 
     expect(rbacAuditService.record).not.toHaveBeenCalled();
   });
