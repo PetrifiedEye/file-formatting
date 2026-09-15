@@ -24,15 +24,24 @@ Responses:
   ```json
   { "message": "Enter the code sent to your email to finish signing in.", "verificationRequired": true }
   ```
-- `401 Unauthorized` — invalid credentials (unknown email OR wrong password OR unconfirmed
-  registration is *not* this case, see below): generic body
-  `{ "message": "Invalid email or password." }` (FR-002, FR-003, SC-002).
+- `401 Unauthorized` — invalid credentials: unknown email, wrong password, OR a wrong password
+  against a *locked* account (unconfirmed registration is *not* this case, see below): generic
+  body `{ "message": "Invalid email or password." }` (FR-002, FR-003, SC-002).
 - `403 Forbidden` — account exists, password correct, but `status = pending_confirmation`:
   `{ "message": "Please confirm your email before signing in.", "canResend": true }` (FR-016).
-- `423 Locked` — account temporarily locked from failed attempts:
+- `423 Locked` — account temporarily locked from failed attempts, **and the password supplied
+  with this request is the correct one**:
   `{ "message": "Too many failed attempts. Try again later." }` (FR-008; does not reveal lockout
   duration or attempt count, per Story 3 Acceptance Scenario 1).
 - `429 Too Many Requests` — throttled.
+
+Lockout state is disclosed only to a caller who proves ownership of the account by supplying the
+correct password — the same bar the `pending_confirmation` 403 already applies. A locked account
+given the *wrong* password gets the generic 401, indistinguishable from an unknown email or a
+wrong password against a normal account, and does **not** count as an additional failed attempt
+(a wrong guess cannot be used to extend someone else's lockout). This closes the enumeration
+oracle the original 423-before-password-check design created: previously, 423 by itself
+disclosed that an email was registered and currently locked, with no password required at all.
 
 ## `POST /auth/login/verify`
 

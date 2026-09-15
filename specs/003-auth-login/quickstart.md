@@ -79,7 +79,16 @@ done
 curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"quickstart@example.com","password":"CorrectHorse123!"}'
-# Expect: 423 even with the CORRECT password — account is locked
+# Expect: 423 — the correct password is what reveals the lockout
+
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"quickstart@example.com","password":"still-wrong"}'
+# Expect: 401, not 423 — a wrong password against a locked account gets the same
+# generic failure as any other invalid credentials, so the account's lock state
+# is never disclosed to a caller who hasn't proven they own it. This also means
+# the attempt above did not just extend the lockout: only a *correct* password
+# check reads (and never writes) the lockout state.
 ```
 
 Check the audit trail directly in Postgres (see data-model.md for the table shape):
