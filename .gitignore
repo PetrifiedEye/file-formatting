@@ -6,6 +6,9 @@
 # local asset storage (profile photos)
 /assets
 
+# retained conversion results (CONVERSION_STORAGE_DIR)
+/storage
+
 # Logs
 logs
 *.log

@@ -26,6 +26,7 @@ src/
 │   └── app/         # Root module
 ├── database/        # TypeORM CLI data-source and migrations
 ├── modules/         # Feature modules
+│   └── conversion/  # File format conversion (see its README for the rules)
 └── main.ts          # Entry point
 ```
 
@@ -82,6 +83,9 @@ E2E tests run against a separate, isolated database (not your dev database), so 
 | Validation    | Joi                      |
 | ORM           | TypeORM (`@nestjs/typeorm`) |
 | Database      | PostgreSQL (`pg`)        |
+| CSV           | `csv-parse` / `csv-stringify` |
+| XML           | `fast-xml-parser`        |
+| YAML          | `yaml` (v2, YAML 1.2)    |
 
 ## Core Modules
 
@@ -90,6 +94,49 @@ E2E tests run against a separate, isolated database (not your dev database), so 
 | Configuration | `ConfigModule`  |
 | Database      | `DatabaseModule` |
 | Health Check  | `HealthModule`  |
+
+## File Format Conversion
+
+`POST /api/convert` converts an uploaded file between CSV, JSON, XML, and
+YAML; `GET /api/convert/formats` lists the directions the service accepts.
+Both require a session.
+
+Every format is one handler that reads its wire form into a canonical document
+and writes that document back out, so four handlers produce all twelve
+directions and the discovery endpoint is derived rather than written down.
+**The mapping rules — what happens to a ragged CSV row, an XML attribute, a
+`null` on the way to a spreadsheet — are specified in
+[`src/modules/conversion/README.md`](src/modules/conversion/README.md)**,
+along with a worked example of adding a fifth format.
+
+### Settings
+
+All optional; the defaults below ship in [`.env.example`](.env.example).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CONVERSION_MAX_BYTES_CSV` | `5242880` | Max accepted CSV input |
+| `CONVERSION_MAX_BYTES_JSON` | `5242880` | Max accepted JSON input |
+| `CONVERSION_MAX_BYTES_XML` | `5242880` | Max accepted XML input |
+| `CONVERSION_MAX_BYTES_YAML` | `5242880` | Max accepted YAML input |
+| `CONVERSION_MAX_OUTPUT_BYTES` | `20971520` | Ceiling on the produced document |
+| `CONVERSION_MAX_DEPTH` | `64` | Max structural nesting depth |
+| `CONVERSION_MAX_NODES` | `200000` | Max nodes in the parsed document |
+| `CONVERSION_MAX_CSV_COLUMNS` | `1024` | Max columns a CSV output may have |
+| `CONVERSION_TIMEOUT_MS` | `10000` | Per-conversion time budget |
+| `CONVERSION_MAX_CONCURRENT` | `4` | Conversions in flight (bounds memory) |
+| `CONVERSION_STORAGE_DIR` | `./storage/conversions` | Retained-result root |
+
+The input limit is **per source format**: the one applied is the detected
+format's, so the same byte count can be accepted as XML and refused as CSV.
+
+### The storage root is not `ASSETS_DIR`
+
+`CONVERSION_STORAGE_DIR` must stay **outside** `ASSETS_DIR`. `@fastify/static`
+serves `ASSETS_DIR` at `/assets/` with no authentication, so a retained
+conversion placed there would be readable by anyone who could guess its path.
+Nothing serves retained files over HTTP; the application logs an error at
+startup if the two directories overlap.
 
 ## Adding a Module
 

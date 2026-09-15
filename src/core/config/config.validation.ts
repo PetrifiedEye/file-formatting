@@ -91,4 +91,70 @@ export const configValidationSchema = Joi.object<Config>({
   ASSETS_DIR: Joi.string().required(),
   ASSETS_BASE_URL: Joi.string().uri().required(),
   PHOTO_MAX_SIZE_BYTES: Joi.number().optional().default(5242880),
+
+  /**
+   * File format conversion limits.
+   *
+   * Every numeric limit is a positive integer: a zero or negative ceiling would
+   * not "disable" the guard, it would refuse every document while reporting a
+   * limit failure, so it is rejected at startup instead.
+   */
+  CONVERSION_MAX_BYTES_CSV: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(5242880),
+  CONVERSION_MAX_BYTES_JSON: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(5242880),
+  CONVERSION_MAX_BYTES_XML: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(5242880),
+  CONVERSION_MAX_BYTES_YAML: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(5242880),
+  CONVERSION_MAX_OUTPUT_BYTES: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(20971520),
+  CONVERSION_MAX_DEPTH: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(64),
+  CONVERSION_MAX_NODES: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(200000),
+  CONVERSION_MAX_CSV_COLUMNS: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(1024),
+  CONVERSION_TIMEOUT_MS: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(10000),
+  CONVERSION_MAX_CONCURRENT: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(4),
+  /**
+   * Not `ASSETS_DIR`: that tree is served unauthenticated by `@fastify/static`,
+   * and retained results must stay private to their owner (FR-027).
+   */
+  CONVERSION_STORAGE_DIR: Joi.string()
+    .min(1)
+    .optional()
+    .default('./storage/conversions'),
 });

@@ -32,6 +32,16 @@ export default tseslint.config(
     },
   },
   {
+    // Format handlers are `async` by contract, not by accident: `read` and
+    // `write` are declared to return a Promise, and a synchronous `throw` from
+    // one would slip past every caller that handles failures with `.catch`.
+    // Several of them have nothing to await, and that is the intended shape.
+    files: ['src/modules/conversion/formats/*.handler.ts'],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
+    },
+  },
+  {
     files: ['test/**/*.ts'],
     rules: {
       '@typescript-eslint/no-unsafe-call': 'off',
