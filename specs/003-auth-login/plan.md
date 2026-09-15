@@ -47,7 +47,10 @@ single indexed lookup (`sessions.token_hash` unique index), no heavier than exis
 **Constraints**: Every failed-login outcome (unknown email vs wrong password) MUST be
 indistinguishable (FR-002/FR-003/SC-002); no request may leak whether an email is registered
 across login, verification, or password-reset endpoints; rate limiting and lockout MUST NOT
-themselves become an email-address oracle (generic 423/401 bodies).
+themselves become an email-address oracle. A generic body alone is not sufficient for this: the
+lockout status code (423 vs 401) is itself part of the response and MUST NOT be returned unless
+the caller has already proven ownership of the account with the correct password — otherwise the
+status code is the oracle even with identical bodies.
 
 **Scale/Scope**: Same single-tenant scale as the existing registration feature; 4 new tables, ~10
 new/changed source files, no new infrastructure services.
