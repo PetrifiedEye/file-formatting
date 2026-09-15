@@ -49,13 +49,17 @@
     "bcryptjs": "^3.0.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
+    "csv-parse": "^7.0.2",
+    "csv-stringify": "^6.8.3",
+    "fast-xml-parser": "^5.11.1",
     "joi": "^18.0.2",
     "nodemailer": "^9.1.0",
     "pg": "^8.20.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "typeorm": "^0.3.28",
-    "typeorm-transactional": "^0.5.0"
+    "typeorm-transactional": "^0.5.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

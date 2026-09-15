@@ -1,0 +1,6 @@
+- name: Ann
+  age: "30"
+  city: Rome
+- name: Bob
+  age: "41"
+  city: Oslo
