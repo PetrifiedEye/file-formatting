@@ -45,6 +45,28 @@ const DOCUMENTED: [string, HttpStatus, ConversionErrorCategory][] = [
     ConversionErrorCategory.UNSUPPORTED_MEDIA_TYPE,
   ],
   ['internal_error', 500, ConversionErrorCategory.INTERNAL_ERROR],
+
+  // Image conversion (feature 011), from contracts/image-conversion-api.md.
+  ['image_invalid', 400, ConversionErrorCategory.PARSE_ERROR],
+  [
+    'image_pixel_budget_exceeded',
+    400,
+    ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED,
+  ],
+  [
+    'image_dimensions_exceeded',
+    400,
+    ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED,
+  ],
+  ['svg_no_intrinsic_size', 400, ConversionErrorCategory.BAD_REQUEST],
+  ['svg_active_content', 400, ConversionErrorCategory.BAD_REQUEST],
+  ['svg_external_reference', 400, ConversionErrorCategory.BAD_REQUEST],
+  ['svg_render_failed', 400, ConversionErrorCategory.PARSE_ERROR],
+  [
+    'image_vectorisation_unsupported',
+    415,
+    ConversionErrorCategory.UNSUPPORTED_MEDIA_TYPE,
+  ],
 ];
 
 describe('ConversionException', () => {
@@ -167,6 +189,78 @@ describe('ConversionException', () => {
 
     expect(depth.message).toBe('Input nesting exceeds the maximum depth of 64');
     expect(nodes.message).toBe('Input exceeds the maximum of 200000 nodes');
+  });
+
+  describe('the image codes (feature 011)', () => {
+    it('names the declared pixel count and the budget it passed', () => {
+      const body = new ConversionException(
+        ConversionErrorCode.IMAGE_PIXEL_BUDGET_EXCEEDED,
+        { pixels: 40000000, limit: 16000000 },
+      ).getResponse() as ConversionErrorBody;
+
+      expect(body.message).toBe(
+        'Image declares 40000000 pixels, over the maximum of 16000000',
+      );
+      expect(body.code).toBe('image_pixel_budget_exceeded');
+    });
+
+    it('names both the requested size and the permitted one', () => {
+      const body = new ConversionException(
+        ConversionErrorCode.IMAGE_DIMENSIONS_EXCEEDED,
+        { width: 99999, height: 99999, maxWidth: 8192, maxHeight: 8192 },
+      ).getResponse() as ConversionErrorBody;
+
+      expect(body.message).toBe(
+        'Image would render at 99999x99999, over the maximum of 8192x8192',
+      );
+    });
+
+    it('says plainly that vectorisation is never performed', () => {
+      const exception = new ConversionException(
+        ConversionErrorCode.IMAGE_VECTORISATION_UNSUPPORTED,
+      );
+      const body = exception.getResponse() as ConversionErrorBody;
+
+      expect(exception.getStatus()).toBe(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
+      expect(body.message).toBe(
+        'Converting a raster image to a vector format is never performed',
+      );
+    });
+
+    // The point of the numeric-only parameter type: there is no channel
+    // through which a file name, a pixel, or a library message could reach a
+    // message, a log line, or `failure_reason` (FR-026, SC-012).
+    it('builds every message from fixed text and numbers alone', () => {
+      const hostile = {
+        limit: 1,
+        pixels: 2,
+        width: 3,
+        height: 4,
+        maxWidth: 5,
+        maxHeight: 6,
+        line: 7,
+        column: 8,
+      };
+
+      for (const [code] of DOCUMENTED) {
+        const body = new ConversionException(
+          code as never,
+          hostile,
+        ).getResponse() as ConversionErrorBody;
+
+        // Every interpolated span is a number; nothing else is interpolated.
+        expect(body.message.replace(/[0-9]/g, '')).not.toMatch(/[<>{}]/);
+        expect(typeof body.message).toBe('string');
+      }
+    });
+
+    it('reduces an image failure to a code for failure_reason', () => {
+      expect(
+        new ConversionException(ConversionErrorCode.SVG_ACTIVE_CONTENT, {
+          width: 10,
+        }).toFailureReason(),
+      ).toBe('svg_active_content');
+    });
   });
 
   it('is an HttpException, so Nest renders it without a custom filter', () => {

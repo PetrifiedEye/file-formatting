@@ -88,6 +88,14 @@ import { YamlHandler } from './formats/yaml.handler';
       }),
     },
   ],
-  exports: [FormatRegistryService, CONVERSION_LIMITS],
+  // History and retention are exported so the image module can write into the
+  // *same* conversion history (feature 011, FR-024) rather than growing a
+  // parallel one. The edge is one-directional: image-conversion → conversion.
+  exports: [
+    FormatRegistryService,
+    CONVERSION_LIMITS,
+    ConversionHistoryService,
+    ConversionRetentionService,
+  ],
 })
 export class ConversionModule {}

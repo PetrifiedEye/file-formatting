@@ -10,6 +10,7 @@ import { ThrottlerModule } from '@/core/throttler/throttler.module';
 
 import { AuthModule } from '@/modules/auth/auth.module';
 import { ConversionModule } from '@/modules/conversion/conversion.module';
+import { ImageConversionModule } from '@/modules/image-conversion/image-conversion.module';
 import { RbacModule } from '@/modules/rbac/rbac.module';
 import { SettingsModule } from '@/modules/settings/settings.module';
 import { UsersModule } from '@/modules/users/users.module';
@@ -26,6 +27,7 @@ import { UsersModule } from '@/modules/users/users.module';
     AuthModule,
     RbacModule,
     ConversionModule,
+    ImageConversionModule,
   ],
   providers: [
     {

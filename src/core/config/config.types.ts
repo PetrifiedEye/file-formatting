@@ -112,4 +112,58 @@ export interface Config {
    * are private to their owner and are not served over HTTP at all.
    */
   CONVERSION_STORAGE_DIR: string;
+
+  /**
+   * Image conversion limits.
+   *
+   * The input ceiling is per source format for the same reason the text
+   * conversion one is — the limit applied is the *detected* source format's —
+   * but the numbers differ in kind: a megabyte of SVG is a few thousand
+   * characters that can demand gigabytes of pixels, so its cap is the tightest
+   * of the three and the real guard is the intrinsic-size rule.
+   */
+  IMAGE_MAX_BYTES_PNG?: number;
+  IMAGE_MAX_BYTES_JPEG?: number;
+  IMAGE_MAX_BYTES_SVG?: number;
+
+  /** Largest rasterisation permitted, checked *before* the renderer is built. */
+  IMAGE_MAX_OUTPUT_WIDTH?: number;
+  IMAGE_MAX_OUTPUT_HEIGHT?: number;
+
+  /**
+   * Decoded pixel budget, read from the container header before any pixel
+   * buffer is allocated. Peak raster memory is bounded by
+   * `IMAGE_MAX_PIXELS x 4 bytes x IMAGE_MAX_CONCURRENT`.
+   */
+  IMAGE_MAX_PIXELS?: number;
+
+  /** Ceiling on the produced image; conversion fails rather than truncates. */
+  IMAGE_MAX_OUTPUT_BYTES?: number;
+
+  /**
+   * What transparency is composited onto when the target cannot hold alpha,
+   * and what an SVG is rasterised over. `#rrggbb`.
+   */
+  IMAGE_BACKGROUND_COLOR?: string;
+
+  /** Fixed output quality for JPEG. Never caller-supplied. */
+  IMAGE_JPEG_QUALITY?: number;
+
+  /** Per-conversion wall-clock budget. */
+  IMAGE_CONVERSION_TIMEOUT_MS?: number;
+
+  /**
+   * How many image conversions may hold a decoded raster at once. Lower than
+   * the text pipeline's, because an image's expanded form is far larger
+   * relative to its upload than a parsed document's is.
+   */
+  IMAGE_MAX_CONCURRENT?: number;
+
+  /**
+   * Fonts available to SVG rasterisation. Empty means no fonts at all and no
+   * system-font scan, so `<text>` renders as nothing — deliberate, because
+   * substituting whatever font a host happens to have would make output
+   * non-reproducible across machines.
+   */
+  IMAGE_SVG_FONT_DIR?: string;
 }

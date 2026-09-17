@@ -4,9 +4,9 @@ import { Repository } from 'typeorm';
 
 import {
   ConversionErrorCategory,
-  ConversionFormat,
   ConversionOutcome,
   ConversionRetentionOutcome,
+  RecordedFormat,
 } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
 import { ConversionRecord } from './entities/conversion-record.entity';
@@ -15,8 +15,8 @@ import { ConversionRecord } from './entities/conversion-record.entity';
 export interface ConversionAttempt {
   userId: string;
   originalFileName: string;
-  sourceFormat: ConversionFormat | null;
-  targetFormat: ConversionFormat | null;
+  sourceFormat: RecordedFormat | null;
+  targetFormat: RecordedFormat | null;
   inputSizeBytes: number;
   outputSizeBytes: number | null;
   retentionRequested: boolean;
