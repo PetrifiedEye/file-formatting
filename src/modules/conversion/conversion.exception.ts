@@ -22,6 +22,20 @@ export interface ConversionErrorParams {
   /** Location within the input — a position, never the text at it. */
   line?: number;
   column?: number;
+
+  /**
+   * Image dimensions, for the refusals that must name what was asked for and
+   * what is permitted (feature 011, FR-018, FR-019).
+   *
+   * All numbers, deliberately: widening this type with a `string` is the one
+   * edit that would make the guarantee above — no file content in a message, a
+   * log line, or `failure_reason` — a rule to remember rather than a shape.
+   */
+  width?: number;
+  height?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  pixels?: number;
 }
 
 interface ConversionErrorDefinition {
@@ -158,6 +172,58 @@ export const CONVERSION_ERROR_DEFINITIONS: Record<
     status: HttpStatus.INTERNAL_SERVER_ERROR,
     category: ConversionErrorCategory.INTERNAL_ERROR,
     message: () => 'Conversion failed',
+  },
+
+  // Image conversion (feature 011). The categories are the existing seven —
+  // one column, one vocabulary — so an image failure is reportable alongside a
+  // text one without either feature learning about the other.
+  [ConversionErrorCode.IMAGE_INVALID]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.PARSE_ERROR,
+    message: () => 'Input is not a valid image of its detected format',
+  },
+  [ConversionErrorCode.IMAGE_PIXEL_BUDGET_EXCEEDED]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED,
+    message: (params) =>
+      `Image declares ${params.pixels} pixels, over the maximum of ${params.limit}`,
+  },
+  [ConversionErrorCode.IMAGE_DIMENSIONS_EXCEEDED]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED,
+    message: (params) =>
+      `Image would render at ${params.width}x${params.height}, over the maximum of ` +
+      `${params.maxWidth}x${params.maxHeight}`,
+  },
+  [ConversionErrorCode.SVG_NO_INTRINSIC_SIZE]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.BAD_REQUEST,
+    message: () =>
+      'SVG size could not be determined from width, height, or viewBox',
+  },
+  [ConversionErrorCode.SVG_ACTIVE_CONTENT]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.BAD_REQUEST,
+    message: () => 'SVG input must not contain active content',
+  },
+  [ConversionErrorCode.SVG_EXTERNAL_REFERENCE]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.BAD_REQUEST,
+    message: () => 'SVG input must not reference external resources',
+  },
+  [ConversionErrorCode.SVG_RENDER_FAILED]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.PARSE_ERROR,
+    message: () => 'The drawing could not be rendered',
+  },
+  // 415 rather than 400: the value is a real, supported format — what is
+  // unsupported is it being a *target*, which is the same judgement
+  // /api/convert makes for an unsupported target.
+  [ConversionErrorCode.IMAGE_VECTORISATION_UNSUPPORTED]: {
+    status: HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+    category: ConversionErrorCategory.UNSUPPORTED_MEDIA_TYPE,
+    message: () =>
+      'Converting a raster image to a vector format is never performed',
   },
 };
 

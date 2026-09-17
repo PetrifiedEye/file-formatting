@@ -13,6 +13,34 @@ export enum ConversionFormat {
   YAML = 'yaml',
 }
 
+/**
+ * The image formats, added by feature 011.
+ *
+ * A separate enum rather than more members of {@link ConversionFormat}: the
+ * text handlers key exhaustive `Record<ConversionFormat, …>` maps off that
+ * one, and widening it would both break their totality and let a *text*
+ * direction be computed for `png`. The two sets meet only where they must —
+ * in the two persisted columns, as {@link RecordedFormat}.
+ */
+export enum ImageFormat {
+  PNG = 'png',
+  JPEG = 'jpeg',
+  SVG = 'svg',
+}
+
+/**
+ * What the persisted format columns accept: either family.
+ *
+ * Both features write it; neither owns it. The value itself says which family
+ * an attempt belongs to, which is why neither table carries a discriminator
+ * column — that would be derived data able to disagree with the data it is
+ * derived from.
+ */
+export type RecordedFormat = ConversionFormat | ImageFormat;
+
+/** The runtime companion to the union, for `enum:` column metadata. */
+export const RecordedFormat = { ...ConversionFormat, ...ImageFormat };
+
 export enum ConversionOutcome {
   SUCCESS = 'success',
   FAILURE = 'failure',

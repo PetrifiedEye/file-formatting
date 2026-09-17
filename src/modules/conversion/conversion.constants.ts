@@ -30,6 +30,18 @@ export const ConversionErrorCode = {
   UNSUPPORTED_TARGET_FORMAT: 'unsupported_target_format',
   UNAUTHENTICATED: 'unauthenticated',
   INTERNAL_ERROR: 'internal_error',
+
+  // Image conversion (feature 011). Added here rather than to a second table
+  // because `conversion_records.error_category` is one column: both features
+  // have to speak one vocabulary.
+  IMAGE_INVALID: 'image_invalid',
+  IMAGE_PIXEL_BUDGET_EXCEEDED: 'image_pixel_budget_exceeded',
+  IMAGE_DIMENSIONS_EXCEEDED: 'image_dimensions_exceeded',
+  SVG_NO_INTRINSIC_SIZE: 'svg_no_intrinsic_size',
+  SVG_ACTIVE_CONTENT: 'svg_active_content',
+  SVG_EXTERNAL_REFERENCE: 'svg_external_reference',
+  SVG_RENDER_FAILED: 'svg_render_failed',
+  IMAGE_VECTORISATION_UNSUPPORTED: 'image_vectorisation_unsupported',
 } as const;
 
 export type ConversionErrorCode =

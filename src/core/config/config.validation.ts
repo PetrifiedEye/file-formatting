@@ -157,4 +157,70 @@ export const configValidationSchema = Joi.object<Config>({
     .min(1)
     .optional()
     .default('./storage/conversions'),
+
+  /**
+   * Image conversion limits.
+   *
+   * Every numeric value is a positive integer for the same reason the text
+   * limits are: a zero ceiling would not disable a guard, it would refuse
+   * every image while reporting a limit failure.
+   */
+  IMAGE_MAX_BYTES_PNG: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(10485760),
+  IMAGE_MAX_BYTES_JPEG: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(10485760),
+  IMAGE_MAX_BYTES_SVG: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(2097152),
+  IMAGE_MAX_OUTPUT_WIDTH: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(8192),
+  IMAGE_MAX_OUTPUT_HEIGHT: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(8192),
+  IMAGE_MAX_PIXELS: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(16000000),
+  IMAGE_MAX_OUTPUT_BYTES: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(20971520),
+  /**
+   * Validated at startup rather than discovered in production: an unparseable
+   * colour would otherwise surface as a black background on the first
+   * transparent PNG somebody converts.
+   */
+  IMAGE_BACKGROUND_COLOR: Joi.string()
+    .pattern(/^#[0-9a-fA-F]{6}$/)
+    .optional()
+    .default('#ffffff'),
+  IMAGE_JPEG_QUALITY: Joi.number()
+    .integer()
+    .min(1)
+    .max(100)
+    .optional()
+    .default(85),
+  IMAGE_CONVERSION_TIMEOUT_MS: Joi.number()
+    .integer()
+    .positive()
+    .optional()
+    .default(30000),
+  IMAGE_MAX_CONCURRENT: Joi.number().integer().positive().optional().default(2),
+  /** Empty is meaningful: no fonts, and no system-font scan. */
+  IMAGE_SVG_FONT_DIR: Joi.string().allow('').optional().default(''),
 });

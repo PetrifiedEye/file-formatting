@@ -13,9 +13,9 @@ import { User } from '@/modules/users/entities/user.entity';
 
 import {
   ConversionErrorCategory,
-  ConversionFormat,
   ConversionOutcome,
   ConversionRetentionOutcome,
+  RecordedFormat,
 } from '../conversion.enums';
 import { ConversionStoredFile } from './conversion-stored-file.entity';
 
@@ -52,25 +52,31 @@ export class ConversionRecord {
   @Column({ name: 'original_file_name', type: 'varchar', length: 255 })
   originalFileName!: string;
 
-  /** Nullable: detection may fail before any format is known. */
+  /**
+   * Nullable: detection may fail before any format is known.
+   *
+   * `RecordedFormat` rather than `ConversionFormat`: the column holds both
+   * families, and the value itself is what says which one an attempt belongs
+   * to — which is why there is no discriminator column (feature 011).
+   */
   @Column({
     name: 'source_format',
     type: 'enum',
-    enum: ConversionFormat,
+    enum: RecordedFormat,
     enumName: 'conversion_format',
     nullable: true,
   })
-  sourceFormat!: ConversionFormat | null;
+  sourceFormat!: RecordedFormat | null;
 
   /** Nullable: the request may name a format we do not support. */
   @Column({
     name: 'target_format',
     type: 'enum',
-    enum: ConversionFormat,
+    enum: RecordedFormat,
     enumName: 'conversion_format',
     nullable: true,
   })
-  targetFormat!: ConversionFormat | null;
+  targetFormat!: RecordedFormat | null;
 
   /**
    * Bytes actually received. For a 413 this is where the budget was exceeded,

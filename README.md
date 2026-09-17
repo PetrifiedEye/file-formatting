@@ -13,6 +13,7 @@ npm run lint:check   # Lint without auto-fix
 npm run verify       # Typecheck + lint (no fix) + unit tests
 npm run test         # Unit tests
 npm run test:e2e     # E2E tests
+npm run fixtures:images  # Regenerate the image test fixtures (pretest:e2e runs it)
 ```
 
 ## Project Structure
@@ -26,7 +27,8 @@ src/
 │   └── app/         # Root module
 ├── database/        # TypeORM CLI data-source and migrations
 ├── modules/         # Feature modules
-│   └── conversion/  # File format conversion (see its README for the rules)
+│   ├── conversion/  # File format conversion (see its README for the rules)
+│   └── image-conversion/  # Image conversion (see its README for the rules)
 └── main.ts          # Entry point
 ```
 
@@ -130,13 +132,65 @@ All optional; the defaults below ship in [`.env.example`](.env.example).
 The input limit is **per source format**: the one applied is the detected
 format's, so the same byte count can be accepted as XML and refused as CSV.
 
-### The storage root is not `ASSETS_DIR`
+## Image Conversion
+
+`POST /api/images/convert` converts an uploaded image between PNG, JPEG, and
+SVG-as-a-source; `GET /api/images/convert/formats` lists the directions the
+service accepts. Both require a session.
+
+Each format is one handler that may implement `decode`, `encode`, or both, and
+conversion is always `decode → RasterImage → encode`. The direction set is
+*decoders x encoders minus self-pairs* — which is why `png→svg` is not
+forbidden but **unrepresentable**: the SVG handler implements no encoder, so
+the pair cannot be computed and discovery cannot advertise it.
+
+**The rules — SVG sizing and safety, alpha compositing, EXIF orientation, the
+pixel budget, and a worked example of adding WebP — are in
+[`src/modules/image-conversion/README.md`](src/modules/image-conversion/README.md)**,
+with the pixel-level contract in
+[`specs/011-image-conversion/contracts/image-rasterisation-rules.md`](specs/011-image-conversion/contracts/image-rasterisation-rules.md).
+
+Image attempts are recorded in the *same* `conversion_records` history as text
+conversions, and retained images share `CONVERSION_STORAGE_DIR`. The feature
+adds no table and no column.
+
+### Settings
+
+All optional; the defaults below ship in [`.env.example`](.env.example).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `IMAGE_MAX_BYTES_PNG` | `10485760` | Max accepted PNG input |
+| `IMAGE_MAX_BYTES_JPEG` | `10485760` | Max accepted JPEG input |
+| `IMAGE_MAX_BYTES_SVG` | `2097152` | Max accepted SVG input |
+| `IMAGE_MAX_OUTPUT_WIDTH` | `8192` | Max rasterised width |
+| `IMAGE_MAX_OUTPUT_HEIGHT` | `8192` | Max rasterised height |
+| `IMAGE_MAX_PIXELS` | `16000000` | Decoded pixel budget, read from the header |
+| `IMAGE_MAX_OUTPUT_BYTES` | `20971520` | Ceiling on the produced image |
+| `IMAGE_BACKGROUND_COLOR` | `#ffffff` | What alpha composites onto |
+| `IMAGE_JPEG_QUALITY` | `85` | Fixed output quality; never caller-supplied |
+| `IMAGE_CONVERSION_TIMEOUT_MS` | `30000` | Per-conversion time budget |
+| `IMAGE_MAX_CONCURRENT` | `2` | Conversions in flight (bounds memory) |
+| `IMAGE_SVG_FONT_DIR` | *(empty)* | Fonts for SVG text; empty means none |
+
+Like the text pipeline, the input limit is **per source format**, so the same
+byte count can be accepted as PNG and refused as SVG. `IMAGE_SVG_FONT_DIR`
+being empty is meaningful rather than unset: no fonts are loaded and no system
+font scan happens, so `<text>` in an SVG renders as nothing — deliberate, so
+the same drawing converts identically on every host.
+
+Peak raster memory is bounded by `IMAGE_MAX_PIXELS x 4 bytes x
+IMAGE_MAX_CONCURRENT`.
+
+## The storage root is not `ASSETS_DIR`
+
+Shared by both conversion features, and the reason they share one root.
 
 `CONVERSION_STORAGE_DIR` must stay **outside** `ASSETS_DIR`. `@fastify/static`
 serves `ASSETS_DIR` at `/assets/` with no authentication, so a retained
-conversion placed there would be readable by anyone who could guess its path.
-Nothing serves retained files over HTTP; the application logs an error at
-startup if the two directories overlap.
+conversion or image placed there would be readable by anyone who could guess
+its path. Nothing serves retained files over HTTP; the application logs an
+error at startup if the two directories overlap.
 
 ## Adding a Module
 

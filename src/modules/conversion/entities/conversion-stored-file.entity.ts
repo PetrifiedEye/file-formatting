@@ -11,7 +11,7 @@ import {
 
 import { User } from '@/modules/users/entities/user.entity';
 
-import { ConversionFormat } from '../conversion.enums';
+import { RecordedFormat } from '../conversion.enums';
 import { ConversionRecord } from './conversion-record.entity';
 
 /**
@@ -45,12 +45,14 @@ export class ConversionStoredFile {
   @JoinColumn({ name: 'conversion_record_id' })
   conversionRecord!: ConversionRecord;
 
+  /** Either family. Only ever `png` or `jpeg` for an image row: SVG has no
+   * encoder, so no SVG result can exist to retain. */
   @Column({
     type: 'enum',
-    enum: ConversionFormat,
+    enum: RecordedFormat,
     enumName: 'conversion_format',
   })
-  format!: ConversionFormat;
+  format!: RecordedFormat;
 
   @Column({ name: 'size_bytes', type: 'integer' })
   sizeBytes!: number;

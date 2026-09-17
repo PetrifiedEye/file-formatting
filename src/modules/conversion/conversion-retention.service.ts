@@ -6,16 +6,13 @@ import { Transactional } from 'typeorm-transactional';
 
 import { ConversionFileStorageService } from '@/core/storage/conversion-file-storage.service';
 
-import {
-  ConversionFormat,
-  ConversionRetentionOutcome,
-} from './conversion.enums';
+import { ConversionRetentionOutcome, RecordedFormat } from './conversion.enums';
 import { ConversionRecord } from './entities/conversion-record.entity';
 import { ConversionStoredFile } from './entities/conversion-stored-file.entity';
 
 export interface RetentionRequest {
   userId: string;
-  format: ConversionFormat;
+  format: RecordedFormat;
   extension: string;
   buffer: Buffer;
 }
@@ -24,7 +21,7 @@ export interface RetentionRequest {
 export interface StoredFile {
   id: string;
   userId: string;
-  format: ConversionFormat;
+  format: RecordedFormat;
   sizeBytes: number;
   storagePath: string;
 }
