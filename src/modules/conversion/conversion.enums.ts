@@ -80,3 +80,18 @@ export enum ConversionRetentionOutcome {
   STORED = 'stored',
   FAILED = 'failed',
 }
+
+/**
+ * Which conversion family an attempt belongs to — persisted, not derived.
+ *
+ * Feature 011 reasoned that the format value itself says which family a row
+ * is in, which holds only when a format was ever recorded. Both format columns
+ * are null on a failure that happens before detection runs, for either family,
+ * leaving the family unrecoverable for a real and reachable subset of rows.
+ * Each writer knows its own family unconditionally, so it supplies this
+ * directly rather than letting a reader infer it.
+ */
+export enum TransformationType {
+  FILE = 'file',
+  IMAGE = 'image',
+}

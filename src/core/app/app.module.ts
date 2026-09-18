@@ -13,6 +13,7 @@ import { ConversionModule } from '@/modules/conversion/conversion.module';
 import { ImageConversionModule } from '@/modules/image-conversion/image-conversion.module';
 import { RbacModule } from '@/modules/rbac/rbac.module';
 import { SettingsModule } from '@/modules/settings/settings.module';
+import { TransformationHistoryModule } from '@/modules/transformation-history/transformation-history.module';
 import { UsersModule } from '@/modules/users/users.module';
 
 @Module({
@@ -28,6 +29,7 @@ import { UsersModule } from '@/modules/users/users.module';
     RbacModule,
     ConversionModule,
     ImageConversionModule,
+    TransformationHistoryModule,
   ],
   providers: [
     {
