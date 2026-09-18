@@ -39,6 +39,7 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
 
 describe('RBAC Permissions CRUD (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -73,7 +74,12 @@ describe('RBAC Permissions CRUD (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -145,7 +151,7 @@ describe('RBAC Permissions CRUD (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    const adminLogin = await request(app.getHttpServer())
+    const adminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: adminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -153,7 +159,7 @@ describe('RBAC Permissions CRUD (e2e)', () => {
       adminLogin.headers['set-cookie'] as unknown as string[],
     );
 
-    const nonAdminLogin = await request(app.getHttpServer())
+    const nonAdminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: nonAdminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -165,7 +171,7 @@ describe('RBAC Permissions CRUD (e2e)', () => {
   it('creates, updates a permission and rejects duplicate names', async () => {
     const name = `docs-${Date.now()}`;
 
-    const createResponse = await request(app.getHttpServer())
+    const createResponse = await request(baseUrl)
       .post('/rbac/permissions')
       .set('Cookie', adminCookie)
       .send({ name, actions: ['read', 'write'] })
@@ -173,13 +179,13 @@ describe('RBAC Permissions CRUD (e2e)', () => {
 
     expect(createResponse.body.actions).toEqual(['read', 'write']);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/permissions')
       .set('Cookie', adminCookie)
       .send({ name, actions: ['read'] })
       .expect(409);
 
-    const updateResponse = await request(app.getHttpServer())
+    const updateResponse = await request(baseUrl)
       .patch(`/rbac/permissions/${createResponse.body.id}`)
       .set('Cookie', adminCookie)
       .send({ actions: ['read'] })
@@ -188,7 +194,7 @@ describe('RBAC Permissions CRUD (e2e)', () => {
   });
 
   it('rejects creating a permission with empty actions (422)', async () => {
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/permissions')
       .set('Cookie', adminCookie)
       .send({ name: `empty-${Date.now()}`, actions: [] })
@@ -213,24 +219,24 @@ describe('RBAC Permissions CRUD (e2e)', () => {
       }),
     );
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/permissions/${permission.id}`)
       .set('Cookie', adminCookie)
       .expect(409);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/grants/${grant.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/permissions/${permission.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
   });
 
   it('denies permission management for a non-admin with 403', async () => {
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/permissions')
       .set('Cookie', nonAdminCookie)
       .send({ name: `nope-${Date.now()}`, actions: ['read'] })

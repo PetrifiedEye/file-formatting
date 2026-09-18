@@ -55,6 +55,7 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
 
 describe('Admin User Directory (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -110,7 +111,12 @@ describe('Admin User Directory (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -257,7 +263,7 @@ describe('Admin User Directory (e2e)', () => {
     await accessConfigService.reload();
 
     const login = async (user: User) => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/login')
         .send({ email: user.email, password: TEST_PASSWORD })
         .expect(200);
@@ -277,7 +283,7 @@ describe('Admin User Directory (e2e)', () => {
     it('returns a full page of allow-listed items with a cursor when more rows exist', async () => {
       await seedDirectoryUsers(25);
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get('/users')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -297,17 +303,17 @@ describe('Admin User Directory (e2e)', () => {
     it('returns a disjoint, idempotent next page and null cursor on the last page', async () => {
       await seedDirectoryUsers(25);
 
-      const firstResponse = await request(app.getHttpServer())
+      const firstResponse = await request(baseUrl)
         .get('/users')
         .set('Cookie', adminCookie)
         .expect(200);
       const firstPage = firstResponse.body as DirectoryPageBody;
 
-      const secondResponseA = await request(app.getHttpServer())
+      const secondResponseA = await request(baseUrl)
         .get(`/users?cursor=${encodeURIComponent(firstPage.nextCursor!)}`)
         .set('Cookie', adminCookie)
         .expect(200);
-      const secondResponseB = await request(app.getHttpServer())
+      const secondResponseB = await request(baseUrl)
         .get(`/users?cursor=${encodeURIComponent(firstPage.nextCursor!)}`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -325,7 +331,7 @@ describe('Admin User Directory (e2e)', () => {
     });
 
     it('returns nextCursor null on the first call when total users are within the limit', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get('/users')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -370,7 +376,7 @@ describe('Admin User Directory (e2e)', () => {
     });
 
     it('matches by email substring, case-insensitively', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get(`/users?search=${encodeURIComponent('ALICE-SEARCH')}`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -380,7 +386,7 @@ describe('Admin User Directory (e2e)', () => {
     });
 
     it('matches by exact account id', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get(`/users?search=${bob.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -390,7 +396,7 @@ describe('Admin User Directory (e2e)', () => {
     });
 
     it('filters by status and sorts by email ascending', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get('/users?status=pending_confirmation&sort=email&direction=asc')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -403,7 +409,7 @@ describe('Admin User Directory (e2e)', () => {
     });
 
     it('combines search and status conjunctively', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get(`/users?search=${encodeURIComponent('-search-')}&status=active`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -418,7 +424,7 @@ describe('Admin User Directory (e2e)', () => {
 
   describe('Scenario 3 — denied without listing rights (US3, P1)', () => {
     it('rejects a reader (users.read only) with 403 and no items', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get('/users')
         .set('Cookie', readerCookie)
         .expect(403);
@@ -427,15 +433,13 @@ describe('Admin User Directory (e2e)', () => {
     });
 
     it('rejects an anonymous caller with 401 and no items', async () => {
-      const response = await request(app.getHttpServer())
-        .get('/users')
-        .expect(401);
+      const response = await request(baseUrl).get('/users').expect(401);
 
       expect(response.body).not.toHaveProperty('items');
     });
 
     it('still allows the reader to fetch a single profile via users.read', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get(`/users/${adminUser.id}`)
         .set('Cookie', readerCookie)
         .expect(200);
@@ -452,7 +456,7 @@ describe('Admin User Directory (e2e)', () => {
       ['cursor=not-a-token', '/users?cursor=not-a-token'],
     ])('rejects %s with 400 and no items', async (_label, path) => {
       clearThrottler();
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get(path)
         .set('Cookie', adminCookie)
         .expect(400);
@@ -463,13 +467,13 @@ describe('Admin User Directory (e2e)', () => {
     it('rejects a page-1 cursor reused with a different search (fingerprint mismatch)', async () => {
       await seedDirectoryUsers(25);
 
-      const firstResponse = await request(app.getHttpServer())
+      const firstResponse = await request(baseUrl)
         .get('/users')
         .set('Cookie', adminCookie)
         .expect(200);
       const firstPage = firstResponse.body as DirectoryPageBody;
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get(
           `/users?search=zzz&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
         )
@@ -483,23 +487,23 @@ describe('Admin User Directory (e2e)', () => {
       await seedDirectoryUsers(5);
 
       clearThrottler();
-      const successResponse = await request(app.getHttpServer())
+      const successResponse = await request(baseUrl)
         .get('/users')
         .set('Cookie', adminCookie)
         .expect(200);
       const successBody = successResponse.body as DirectoryPageBody;
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/users')
         .set('Cookie', readerCookie)
         .expect(403);
 
       clearThrottler();
-      await request(app.getHttpServer()).get('/users').expect(401);
+      await request(baseUrl).get('/users').expect(401);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/users?limit=0')
         .set('Cookie', adminCookie)
         .expect(400);
@@ -538,13 +542,13 @@ describe('Admin User Directory (e2e)', () => {
       clearThrottler();
 
       for (let i = 0; i < 30; i++) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .get('/users')
           .set('Cookie', adminCookie)
           .expect(200);
       }
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/users')
         .set('Cookie', adminCookie)
         .expect(429);
@@ -563,7 +567,7 @@ describe('Admin User Directory (e2e)', () => {
     it('drops a row that starts deleting between two pages', async () => {
       await seedDirectoryUsers(25);
 
-      const firstResponse = await request(app.getHttpServer())
+      const firstResponse = await request(baseUrl)
         .get('/users?limit=10')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -573,7 +577,7 @@ describe('Admin User Directory (e2e)', () => {
       // Look ahead at the page the cursor is about to return, and mark one of
       // *those* rows mid-deletion. Picking a row from page 1 would prove
       // nothing: keyset pagination never revisits it either way.
-      const previewResponse = await request(app.getHttpServer())
+      const previewResponse = await request(baseUrl)
         .get(
           `/users?limit=10&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
         )
@@ -588,7 +592,7 @@ describe('Admin User Directory (e2e)', () => {
         { deletionStartedAt: new Date() },
       );
 
-      const secondResponse = await request(app.getHttpServer())
+      const secondResponse = await request(baseUrl)
         .get(
           `/users?limit=10&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
         )
@@ -608,7 +612,7 @@ describe('Admin User Directory (e2e)', () => {
     it('hides mid-deletion rows from the very first page too', async () => {
       const directoryUsers = await seedDirectoryUsers(5);
 
-      const beforeResponse = await request(app.getHttpServer())
+      const beforeResponse = await request(baseUrl)
         .get('/users?limit=50')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -622,7 +626,7 @@ describe('Admin User Directory (e2e)', () => {
         { deletionStartedAt: new Date() },
       );
 
-      const afterResponse = await request(app.getHttpServer())
+      const afterResponse = await request(baseUrl)
         .get('/users?limit=50')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -641,13 +645,13 @@ describe('Admin User Directory (e2e)', () => {
         { deletionStartedAt: new Date() },
       );
 
-      const byEmail = await request(app.getHttpServer())
+      const byEmail = await request(baseUrl)
         .get(`/users?search=${encodeURIComponent(target.email)}`)
         .set('Cookie', adminCookie)
         .expect(200);
       expect((byEmail.body as DirectoryPageBody).items).toHaveLength(0);
 
-      const byId = await request(app.getHttpServer())
+      const byId = await request(baseUrl)
         .get(`/users?search=${target.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -685,7 +689,7 @@ describe('Admin User Directory (e2e)', () => {
         const query = `/users?limit=3&sort=createdAt&direction=${direction}${
           cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
         }`;
-        const response = await request(app.getHttpServer())
+        const response = await request(baseUrl)
           .get(query)
           .set('Cookie', adminCookie)
           .expect(200);

@@ -64,6 +64,7 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
 
 describe('File Format Conversion (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let userRepository: Repository<User>;
   let recordRepository: Repository<ConversionRecord>;
   let storedFileRepository: Repository<ConversionStoredFile>;
@@ -83,7 +84,7 @@ describe('File Format Conversion (e2e)', () => {
     session: string | null = cookie,
     store?: 'true' | 'false',
   ) => {
-    const call = request(app.getHttpServer()).post('/api/convert');
+    const call = request(baseUrl).post('/api/convert');
 
     if (session) {
       call.set('Cookie', session);
@@ -137,7 +138,12 @@ describe('File Format Conversion (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
     recordRepository = moduleFixture.get(getRepositoryToken(ConversionRecord));
@@ -160,7 +166,7 @@ describe('File Format Conversion (e2e)', () => {
     );
     userId = created.id;
 
-    const login = await request(app.getHttpServer())
+    const login = await request(baseUrl)
       .post('/auth/login')
       .send({ email: userEmail, password: TEST_PASSWORD });
 
@@ -341,7 +347,7 @@ describe('File Format Conversion (e2e)', () => {
     }
 
     const discover = async (): Promise<Advertised[]> => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .get('/api/convert/formats')
         .set('Cookie', cookie);
 
@@ -435,9 +441,7 @@ describe('File Format Conversion (e2e)', () => {
     });
 
     it('requires a session', async () => {
-      const response = await request(app.getHttpServer()).get(
-        '/api/convert/formats',
-      );
+      const response = await request(baseUrl).get('/api/convert/formats');
 
       expect(response.status).toBe(401);
     });
@@ -528,7 +532,7 @@ describe('File Format Conversion (e2e)', () => {
     });
 
     it('records what the caller asked for when store arrives first', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/api/convert')
         .set('Cookie', cookie)
         .field('store', 'true')
@@ -742,13 +746,11 @@ describe('File Format Conversion (e2e)', () => {
       expect(storageService.isInsideAssetsDir()).toBe(false);
 
       // ...and the path is not reachable under /assets/ either way.
-      const served = await request(app.getHttpServer()).get(
-        `/assets/${file.storagePath}`,
-      );
+      const served = await request(baseUrl).get(`/assets/${file.storagePath}`);
       expect(served.status).toBe(404);
 
       // Nothing in this feature serves them at all.
-      const direct = await request(app.getHttpServer())
+      const direct = await request(baseUrl)
         .get(`/api/convert/files/${file.id}`)
         .set('Cookie', cookie);
       expect(direct.status).toBe(404);
@@ -798,17 +800,22 @@ describe('File Format Conversion (e2e)', () => {
         415,
         'unsupported_source_format',
       ],
-    ])('refuses %s with %i %s', async (_label, name, target, status, code) => {
-      const body =
-        name === 'malformed.xml'
-          ? Buffer.from('<a><b>unclosed</a>', 'utf8')
-          : fixture(name);
+    ])(
+      // Placeholders bind to the tuple in order, so the status is the fourth.
+      // With three of them, `%i` landed on the file name and printed NaN.
+      'refuses %s (%s -> %s) with %i %s',
+      async (_label, name, target, status, code) => {
+        const body =
+          name === 'malformed.xml'
+            ? Buffer.from('<a><b>unclosed</a>', 'utf8')
+            : fixture(name);
 
-      const response = await convert(body, name, target);
+        const response = await convert(body, name, target);
 
-      expect([code, response.status]).toEqual([code, status]);
-      expect(response.body.code).toBe(code);
-    });
+        expect([code, response.status]).toEqual([code, status]);
+        expect(response.body.code).toBe(code);
+      },
+    );
 
     it('refuses an unknown target format with 415', async () => {
       const response = await convert(
@@ -822,7 +829,7 @@ describe('File Format Conversion (e2e)', () => {
     });
 
     it('refuses a missing target format with 400', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/api/convert')
         .set('Cookie', cookie)
         .attach('file', fixture('sample.csv'), 'sample.csv');
@@ -832,7 +839,7 @@ describe('File Format Conversion (e2e)', () => {
     });
 
     it('refuses a request with no file part', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/api/convert')
         .set('Cookie', cookie)
         .field('targetFormat', 'json');
@@ -842,7 +849,7 @@ describe('File Format Conversion (e2e)', () => {
     });
 
     it('refuses an unexpected extra part', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/api/convert')
         .set('Cookie', cookie)
         .attach('file', fixture('sample.csv'), 'sample.csv')

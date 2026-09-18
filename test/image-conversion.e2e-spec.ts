@@ -86,6 +86,7 @@ class EgressWatcher {
 
 describe('Image Conversion (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let userRepository: Repository<User>;
   let recordRepository: Repository<ConversionRecord>;
   let storedFileRepository: Repository<ConversionStoredFile>;
@@ -105,7 +106,7 @@ describe('Image Conversion (e2e)', () => {
     session: string | null = cookie,
     store?: 'true' | 'false',
   ) => {
-    const call = request(app.getHttpServer()).post('/api/images/convert');
+    const call = request(baseUrl).post('/api/images/convert');
 
     if (session) {
       call.set('Cookie', session);
@@ -174,7 +175,12 @@ describe('Image Conversion (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
     recordRepository = moduleFixture.get(getRepositoryToken(ConversionRecord));
@@ -196,7 +202,7 @@ describe('Image Conversion (e2e)', () => {
     );
     userId = created.id;
 
-    const login = await request(app.getHttpServer())
+    const login = await request(baseUrl)
       .post('/auth/login')
       .send({ email: userEmail, password: TEST_PASSWORD });
 
@@ -559,9 +565,7 @@ describe('Image Conversion (e2e)', () => {
 
   describe('discovery (US4)', () => {
     const formats = (session: string | null = cookie) => {
-      const call = request(app.getHttpServer()).get(
-        '/api/images/convert/formats',
-      );
+      const call = request(baseUrl).get('/api/images/convert/formats');
 
       if (session) {
         call.set('Cookie', session);
@@ -738,7 +742,7 @@ describe('Image Conversion (e2e)', () => {
     });
 
     it('refuses an unexpected part', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/api/images/convert')
         .set('Cookie', cookie)
         .attach('file', fixture('solid.png'), 'solid.png')
@@ -750,7 +754,7 @@ describe('Image Conversion (e2e)', () => {
     });
 
     it('refuses a request with no file part', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/api/images/convert')
         .set('Cookie', cookie)
         .field('targetFormat', 'jpeg');
@@ -866,7 +870,7 @@ describe('Image Conversion (e2e)', () => {
         `/assets/conversions/${stored!.storagePath}`,
         `/${stored!.storagePath}`,
       ]) {
-        const reachable = await request(app.getHttpServer())
+        const reachable = await request(baseUrl)
           .get(path)
           .set('Cookie', cookie);
 

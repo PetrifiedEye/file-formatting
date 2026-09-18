@@ -73,6 +73,7 @@ class FlipControllerModule {}
 
 describe('RBAC Grants CRUD (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -109,7 +110,12 @@ describe('RBAC Grants CRUD (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -182,7 +188,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    const adminLogin = await request(app.getHttpServer())
+    const adminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: adminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -190,7 +196,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
       adminLogin.headers['set-cookie'] as unknown as string[],
     );
 
-    const nonAdminLogin = await request(app.getHttpServer())
+    const nonAdminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: nonAdminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -210,19 +216,19 @@ describe('RBAC Grants CRUD (e2e)', () => {
       }),
     );
 
-    const createResponse = await request(app.getHttpServer())
+    const createResponse = await request(baseUrl)
       .post('/rbac/grants')
       .set('Cookie', adminCookie)
       .send({ roleId: role.id, permissionId: permission.id, actions: ['read'] })
       .expect(201);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/grants')
       .set('Cookie', adminCookie)
       .send({ roleId: role.id, permissionId: permission.id })
       .expect(409);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/grants')
       .set('Cookie', adminCookie)
       .send({
@@ -235,7 +241,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
     const otherRole = await roleRepository.save(
       roleRepository.create({ name: `role2-${Date.now()}` }),
     );
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/grants')
       .set('Cookie', adminCookie)
       .send({
@@ -245,7 +251,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
       })
       .expect(422);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/grants/${createResponse.body.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
@@ -268,28 +274,28 @@ describe('RBAC Grants CRUD (e2e)', () => {
       userRoleRepository.create({ userId: user.id, roleId: role.id }),
     );
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/test-rbac-flip/protected')
       .set('x-test-user-id', user.id)
       .expect(403);
 
-    const grantResponse = await request(app.getHttpServer())
+    const grantResponse = await request(baseUrl)
       .post('/rbac/grants')
       .set('Cookie', adminCookie)
       .send({ roleId: role.id, permissionId: permission.id })
       .expect(201);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/test-rbac-flip/protected')
       .set('x-test-user-id', user.id)
       .expect(200);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/grants/${grantResponse.body.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/test-rbac-flip/protected')
       .set('x-test-user-id', user.id)
       .expect(403);
@@ -306,7 +312,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
       }),
     );
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/grants')
       .set('Cookie', nonAdminCookie)
       .send({ roleId: role.id, permissionId: permission.id })
@@ -334,7 +340,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
         userRoleRepository.create({ userId: user.id, roleId: role.id }),
       );
 
-      const grantResponse = await request(app.getHttpServer())
+      const grantResponse = await request(baseUrl)
         .post('/rbac/grants')
         .set('Cookie', adminCookie)
         .send({
@@ -344,27 +350,27 @@ describe('RBAC Grants CRUD (e2e)', () => {
         })
         .expect(201);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/test-rbac-flip/protected')
         .set('x-test-user-id', user.id)
         .expect(200);
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/test-rbac-flip/writable')
         .set('x-test-user-id', user.id)
         .expect(200);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/rbac/grants/${grantResponse.body.id}`)
         .set('Cookie', adminCookie)
         .send({ actions: ['read'] })
         .expect(200);
 
       // Revoking `write` must cost the holder `write` and nothing else.
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/test-rbac-flip/writable')
         .set('x-test-user-id', user.id)
         .expect(403);
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/test-rbac-flip/protected')
         .set('x-test-user-id', user.id)
         .expect(200);
@@ -407,7 +413,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
       await accessConfigService.reload();
 
       clearThrottler();
-      const login = await request(app.getHttpServer())
+      const login = await request(baseUrl)
         .post('/auth/login')
         .send({ email: secondAdmin.email, password: TEST_PASSWORD })
         .expect(200);
@@ -415,19 +421,19 @@ describe('RBAC Grants CRUD (e2e)', () => {
         login.headers['set-cookie'] as unknown as string[],
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/grants')
         .set('Cookie', secondAdminCookie)
         .expect(200);
 
       // The *first* admin revokes it, so this is not the self-lockout path.
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/rbac/grants/${secondGrant.id}`)
         .set('Cookie', adminCookie)
         .expect(204);
 
       // Same unexpired cookie, no re-login: the very next request is denied.
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/grants')
         .set('Cookie', secondAdminCookie)
         .expect(403);
@@ -436,7 +442,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
 
   describe('self-lockout protection', () => {
     it('refuses to delete the grant carrying the caller own rbac:manage', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/rbac/grants/${adminRbacGrantId}`)
         .set('Cookie', adminCookie)
         .expect(409);
@@ -445,7 +451,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
       expect(
         await grantRepository.findOne({ where: { id: adminRbacGrantId } }),
       ).not.toBeNull();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/grants')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -462,7 +468,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
         actions: ['manage', 'read'],
       });
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/rbac/grants/${adminRbacGrantId}`)
         .set('Cookie', adminCookie)
         .send({ actions: ['read'] })
@@ -487,7 +493,7 @@ describe('RBAC Grants CRUD (e2e)', () => {
         }),
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/rbac/grants/${grant.id}`)
         .set('Cookie', adminCookie)
         .expect(204);

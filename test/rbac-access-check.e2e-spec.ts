@@ -50,6 +50,7 @@ class TestRbacControllerModule {}
 
 describe('RBAC Access Check (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -71,7 +72,12 @@ describe('RBAC Access Check (e2e)', () => {
     app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
     attachRbacTestAuth(app, moduleFixture);
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -102,13 +108,13 @@ describe('RBAC Access Check (e2e)', () => {
     );
 
   it('returns 401 for an unauthenticated request', async () => {
-    await request(app.getHttpServer()).get('/test-rbac/protected').expect(401);
+    await request(baseUrl).get('/test-rbac/protected').expect(401);
   });
 
   it('returns 403 for an authenticated user without the grant', async () => {
     const user = await seedUser();
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/test-rbac/protected')
       .set('x-test-user-id', user.id)
       .expect(403);
@@ -137,7 +143,7 @@ describe('RBAC Access Check (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/test-rbac/protected')
       .set('x-test-user-id', user.id)
       .expect(200);
@@ -166,7 +172,7 @@ describe('RBAC Access Check (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/test-rbac/protected')
       .set('x-test-user-id', user.id)
       .expect(403);
@@ -196,7 +202,7 @@ describe('RBAC Access Check (e2e)', () => {
     ]);
     await accessConfigService.reload();
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/test-rbac/protected')
       .set('x-test-user-id', user.id)
       .expect(200);

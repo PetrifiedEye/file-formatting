@@ -44,6 +44,7 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
 
 describe('Users Profile (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -81,7 +82,12 @@ describe('Users Profile (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -168,7 +174,7 @@ describe('Users Profile (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    const selfLogin = await request(app.getHttpServer())
+    const selfLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: selfUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -176,7 +182,7 @@ describe('Users Profile (e2e)', () => {
       selfLogin.headers['set-cookie'] as unknown as string[],
     );
 
-    const privilegedLogin = await request(app.getHttpServer())
+    const privilegedLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: privilegedUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -189,7 +195,7 @@ describe('Users Profile (e2e)', () => {
   });
 
   it('returns the full self-profile regardless of roles (Story 1)', async () => {
-    const response = await request(app.getHttpServer())
+    const response = await request(baseUrl)
       .get(`/users/${selfUser.id}`)
       .set('Cookie', selfCookie)
       .expect(200);
@@ -204,7 +210,7 @@ describe('Users Profile (e2e)', () => {
   });
 
   it('returns only id and photo for a privileged viewer of another user (Story 2)', async () => {
-    const response = await request(app.getHttpServer())
+    const response = await request(baseUrl)
       .get(`/users/${targetUser.id}`)
       .set('Cookie', privilegedCookie)
       .expect(200);
@@ -216,7 +222,7 @@ describe('Users Profile (e2e)', () => {
   });
 
   it('denies a non-privileged viewer for both an existing and a nonexistent target (Story 3)', async () => {
-    const existingResponse = await request(app.getHttpServer())
+    const existingResponse = await request(baseUrl)
       .get(`/users/${targetUser.id}`)
       .set('Cookie', selfCookie)
       .expect(403);
@@ -226,7 +232,7 @@ describe('Users Profile (e2e)', () => {
 
     clearThrottler();
 
-    const nonexistentResponse = await request(app.getHttpServer())
+    const nonexistentResponse = await request(baseUrl)
       .get(`/users/${randomUUID()}`)
       .set('Cookie', selfCookie)
       .expect(403);
@@ -234,7 +240,7 @@ describe('Users Profile (e2e)', () => {
   });
 
   it('rejects an unauthenticated request with 401 before any lookup (Story 4)', async () => {
-    await request(app.getHttpServer()).get(`/users/${selfUser.id}`).expect(401);
+    await request(baseUrl).get(`/users/${selfUser.id}`).expect(401);
   });
 
   it('returns 404 for a privileged viewer targeting a nonexistent user (Story 4)', async () => {
@@ -242,7 +248,7 @@ describe('Users Profile (e2e)', () => {
     // level (users.service.spec.ts): JwtAuthGuard already rejects a deleted
     // user's own token with 401 before the controller runs, so that branch
     // is unreachable end-to-end with a real session.
-    const nonexistentResponse = await request(app.getHttpServer())
+    const nonexistentResponse = await request(baseUrl)
       .get(`/users/${randomUUID()}`)
       .set('Cookie', privilegedCookie)
       .expect(404);
@@ -250,7 +256,7 @@ describe('Users Profile (e2e)', () => {
   });
 
   it('returns 404 (not a raw 400) for a malformed userId when the caller is authorized (Story 4)', async () => {
-    const response = await request(app.getHttpServer())
+    const response = await request(baseUrl)
       .get('/users/not-a-uuid')
       .set('Cookie', privilegedCookie)
       .expect(404);
@@ -259,21 +265,21 @@ describe('Users Profile (e2e)', () => {
   });
 
   it('records one audit row per outcome with no field values (Story 5)', async () => {
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get(`/users/${selfUser.id}`)
       .set('Cookie', selfCookie)
       .expect(200);
 
     clearThrottler();
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get(`/users/${targetUser.id}`)
       .set('Cookie', privilegedCookie)
       .expect(200);
 
     clearThrottler();
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get(`/users/${targetUser.id}`)
       .set('Cookie', selfCookie)
       .expect(403);
@@ -281,7 +287,7 @@ describe('Users Profile (e2e)', () => {
     clearThrottler();
 
     const nonexistentId = randomUUID();
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get(`/users/${nonexistentId}`)
       .set('Cookie', privilegedCookie)
       .expect(404);

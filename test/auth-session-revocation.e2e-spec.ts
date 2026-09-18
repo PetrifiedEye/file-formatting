@@ -43,11 +43,18 @@ function extractCookie(
   return cookie.split(';')[0];
 }
 
-function bruteForceOtp(otpHash: string): string {
+// Yields every 2000 iterations: run flat-out, this blocks the event loop for
+// hundreds of ms, which is long enough to starve a keep-alive HTTP socket
+// mid-suite and surface as ECONNRESET or an HTTP parse error in an unrelated
+// request.
+async function bruteForceOtp(otpHash: string): Promise<string> {
   for (let i = 100000; i < 1000000; i += 1) {
     const code = i.toString();
     if (createHash('sha256').update(code).digest('hex') === otpHash) {
       return code;
+    }
+    if (i % 2000 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
     }
   }
   throw new Error('Could not recover OTP from hash');
@@ -60,6 +67,7 @@ function bruteForceOtp(otpHash: string): string {
  */
 describe('Auth session revocation (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let userRepository: Repository<User>;
   let sessionRepository: Repository<AuthSession>;
   let resetChallengeRepository: Repository<PasswordResetChallenge>;
@@ -91,7 +99,12 @@ describe('Auth session revocation (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
     sessionRepository = moduleFixture.get(getRepositoryToken(AuthSession));
@@ -127,14 +140,14 @@ describe('Auth session revocation (e2e)', () => {
     });
 
     email = `session-${Date.now()}-${Math.random()}@example.com`;
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/auth/register')
       .send({ email, password: TEST_PASSWORD })
       .expect(201);
   });
 
   async function signIn(): Promise<{ access: string; refresh: string }> {
-    const response = await request(app.getHttpServer())
+    const response = await request(baseUrl)
       .post('/auth/login')
       .send({ email, password: TEST_PASSWORD })
       .expect(200);
@@ -163,24 +176,24 @@ describe('Auth session revocation (e2e)', () => {
     it('revokes the session, so the refresh token stops working', async () => {
       const { access, refresh } = await signIn();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', refresh)
         .expect(200);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/logout')
         .set('Cookie', `${access}; ${refresh}`)
         .expect(200);
 
       // The token itself is still cryptographically valid and unexpired; only
       // the session behind it is gone.
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', refresh)
         .expect(401);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/auth/session')
         .set('Cookie', access)
         .expect(401);
@@ -196,19 +209,19 @@ describe('Auth session revocation (e2e)', () => {
       const first = await signIn();
       const second = await signIn();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/logout')
         .set('Cookie', `${first.access}; ${first.refresh}`)
         .expect(200);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/auth/session')
         .set('Cookie', second.access)
         .expect(200);
     });
 
     it('still reports success when called without a session cookie', async () => {
-      await request(app.getHttpServer()).post('/auth/logout').expect(200);
+      await request(baseUrl).post('/auth/logout').expect(200);
     });
   });
 
@@ -217,7 +230,7 @@ describe('Auth session revocation (e2e)', () => {
       const phone = await signIn();
       const laptop = await signIn();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/password-reset/request')
         .send({ email })
         .expect(200);
@@ -227,22 +240,24 @@ describe('Auth session revocation (e2e)', () => {
         where: { userId: user.id },
       });
 
-      await request(app.getHttpServer())
+      const code = await bruteForceOtp(challenge.otpHash);
+
+      await request(baseUrl)
         .post('/auth/password-reset/confirm')
         .send({
           email,
-          code: bruteForceOtp(challenge.otpHash),
+          code,
           newPassword: NEW_PASSWORD,
         })
         .expect(200);
 
       // Both devices are signed out — this is the whole point of a reset after
       // a credential compromise.
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/auth/session')
         .set('Cookie', phone.access)
         .expect(401);
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', laptop.refresh)
         .expect(401);
@@ -259,12 +274,12 @@ describe('Auth session revocation (e2e)', () => {
       ).toBe(true);
 
       // The new password still opens a working session.
-      const after = await request(app.getHttpServer())
+      const after = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password: NEW_PASSWORD })
         .expect(200);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/auth/session')
         .set(
           'Cookie',
@@ -282,7 +297,7 @@ describe('Auth session revocation (e2e)', () => {
       const { refresh } = await signIn();
       const user = await userRepository.findOneOrFail({ where: { email } });
 
-      const renewed = await request(app.getHttpServer())
+      const renewed = await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', refresh)
         .expect(200);
@@ -293,7 +308,7 @@ describe('Auth session revocation (e2e)', () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0].revokedAt).toBeNull();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/auth/session')
         .set(
           'Cookie',
@@ -317,7 +332,7 @@ describe('Auth session revocation (e2e)', () => {
         },
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', refresh)
         .expect(401);

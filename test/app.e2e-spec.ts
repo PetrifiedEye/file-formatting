@@ -15,6 +15,7 @@ import { AppModule } from '../src/core/app/app.module';
 
 describe('Health (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
 
   beforeAll(async () => {
     initializeTransactionalContext({ storageDriver: StorageDriver.AUTO });
@@ -29,7 +30,12 @@ describe('Health (e2e)', () => {
 
     app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
   });
 
   afterAll(async () => {
@@ -37,6 +43,6 @@ describe('Health (e2e)', () => {
   });
 
   it('/health (GET)', () => {
-    return request(app.getHttpServer()).get('/health').expect(200);
+    return request(baseUrl).get('/health').expect(200);
   });
 });

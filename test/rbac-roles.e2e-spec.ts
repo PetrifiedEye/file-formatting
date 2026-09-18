@@ -39,6 +39,7 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
 
 describe('RBAC Roles CRUD (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -75,7 +76,12 @@ describe('RBAC Roles CRUD (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -149,7 +155,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    const adminLogin = await request(app.getHttpServer())
+    const adminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: adminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -157,7 +163,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
       adminLogin.headers['set-cookie'] as unknown as string[],
     );
 
-    const nonAdminLogin = await request(app.getHttpServer())
+    const nonAdminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: nonAdminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -169,7 +175,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
   it('creates, lists, updates a role and rejects duplicate names', async () => {
     const name = `editor-${Date.now()}`;
 
-    const createResponse = await request(app.getHttpServer())
+    const createResponse = await request(baseUrl)
       .post('/rbac/roles')
       .set('Cookie', adminCookie)
       .send({ name })
@@ -177,13 +183,13 @@ describe('RBAC Roles CRUD (e2e)', () => {
 
     expect(createResponse.body.name).toBe(name);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/roles')
       .set('Cookie', adminCookie)
       .send({ name })
       .expect(409);
 
-    const listResponse = await request(app.getHttpServer())
+    const listResponse = await request(baseUrl)
       .get('/rbac/roles')
       .set('Cookie', adminCookie)
       .expect(200);
@@ -191,7 +197,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
       listResponse.body.some((r: { name: string }) => r.name === name),
     ).toBe(true);
 
-    const updateResponse = await request(app.getHttpServer())
+    const updateResponse = await request(baseUrl)
       .patch(`/rbac/roles/${createResponse.body.id}`)
       .set('Cookie', adminCookie)
       .send({ description: 'updated' })
@@ -211,7 +217,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
         }),
       );
 
-      const memberLogin = await request(app.getHttpServer())
+      const memberLogin = await request(baseUrl)
         .post('/auth/login')
         .send({ email: member.email, password: TEST_PASSWORD })
         .expect(200);
@@ -220,7 +226,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
       );
 
       // Without a role the member cannot reach RBAC management at all.
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/roles')
         .set('Cookie', memberCookie)
         .expect(403);
@@ -229,12 +235,12 @@ describe('RBAC Roles CRUD (e2e)', () => {
         where: { name: adminRoleName },
       });
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .put(`/rbac/roles/${adminRole.id}/members/${member.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
 
-      const members = await request(app.getHttpServer())
+      const members = await request(baseUrl)
         .get(`/rbac/roles/${adminRole.id}/members`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -242,23 +248,23 @@ describe('RBAC Roles CRUD (e2e)', () => {
         members.body.some((m: { userId: string }) => m.userId === member.id),
       ).toBe(true);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/roles')
         .set('Cookie', memberCookie)
         .expect(200);
 
       // Idempotent: a repeat assignment is not an error.
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .put(`/rbac/roles/${adminRole.id}/members/${member.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/rbac/roles/${adminRole.id}/members/${member.id}`)
         .set('Cookie', adminCookie)
         .expect(204);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/roles')
         .set('Cookie', memberCookie)
         .expect(403);
@@ -269,7 +275,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
         where: { name: adminRoleName },
       });
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/rbac/roles/${adminRole.id}/members/${adminUserId}`)
         .set('Cookie', adminCookie)
         .expect(409);
@@ -280,12 +286,12 @@ describe('RBAC Roles CRUD (e2e)', () => {
         where: { name: adminRoleName },
       });
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/roles/not-a-uuid/members')
         .set('Cookie', adminCookie)
         .expect(400);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .put(`/rbac/roles/${adminRole.id}/members/not-a-uuid`)
         .set('Cookie', adminCookie)
         .expect(400);
@@ -296,7 +302,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
         where: { name: adminRoleName },
       });
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .put(`/rbac/roles/${adminRole.id}/members/${adminUserId}`)
         .set('Cookie', nonAdminCookie)
         .expect(403);
@@ -321,17 +327,17 @@ describe('RBAC Roles CRUD (e2e)', () => {
       }),
     );
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/roles/${role.id}`)
       .set('Cookie', adminCookie)
       .expect(409);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/grants/${grant.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/roles/${role.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
@@ -372,7 +378,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
     }
     await accessConfigService.reload();
 
-    const login = await request(app.getHttpServer())
+    const login = await request(baseUrl)
       .post('/auth/login')
       .send({ email: members[0].email, password: TEST_PASSWORD })
       .expect(200);
@@ -380,33 +386,33 @@ describe('RBAC Roles CRUD (e2e)', () => {
       login.headers['set-cookie'] as unknown as string[],
     );
 
-    const sessionBefore = await request(app.getHttpServer())
+    const sessionBefore = await request(baseUrl)
       .get('/auth/session')
       .set('Cookie', memberCookie)
       .expect(200);
     expect(sessionBefore.body.roles).toContain(roleName);
 
     // The role carries real access while its grant stands.
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/rbac/roles')
       .set('Cookie', memberCookie)
       .expect(200);
 
     // A role referenced by a grant cannot be deleted (ON DELETE RESTRICT), so
     // the grant goes first — and that alone is what costs the member access.
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/grants/${grant.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .get('/rbac/roles')
       .set('Cookie', memberCookie)
       .expect(403);
 
     expect(await userRoleRepository.countBy({ roleId: role.id })).toBe(3);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/roles/${role.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
@@ -423,7 +429,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
       expect(await userRepository.countBy({ id: member.id })).toBe(1);
     }
 
-    const sessionAfter = await request(app.getHttpServer())
+    const sessionAfter = await request(baseUrl)
       .get('/auth/session')
       .set('Cookie', memberCookie)
       .expect(200);
@@ -432,7 +438,7 @@ describe('RBAC Roles CRUD (e2e)', () => {
   });
 
   it('denies role management for a non-admin with 403', async () => {
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/roles')
       .set('Cookie', nonAdminCookie)
       .send({ name: `nope-${Date.now()}` })
