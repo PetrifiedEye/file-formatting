@@ -47,6 +47,7 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
 
 describe('Auth Registration (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let usersRepository: Repository<User>;
   let auditRepository: Repository<RegistrationAuditEvent>;
   let settingsRepository: Repository<SystemSettings>;
@@ -81,7 +82,12 @@ describe('Auth Registration (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     usersRepository = moduleFixture.get(getRepositoryToken(User));
     auditRepository = moduleFixture.get(
@@ -179,7 +185,7 @@ describe('Auth Registration (e2e)', () => {
     }
     await accessConfigService.reload();
 
-    const adminLogin = await request(app.getHttpServer())
+    const adminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: adminUser.email, password: ADMIN_PASSWORD })
       .expect(200);
@@ -192,7 +198,7 @@ describe('Auth Registration (e2e)', () => {
     it('creates an active user and handles duplicate anti-enumeration', async () => {
       const email = `scenario1-${Date.now()}@example.com`;
 
-      const registerResponse = await request(app.getHttpServer())
+      const registerResponse = await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'validpass1' })
         .expect(201);
@@ -202,7 +208,7 @@ describe('Auth Registration (e2e)', () => {
       const user = await usersRepository.findOne({ where: { email } });
       expect(user?.status).toBe(UserStatus.ACTIVE);
 
-      const duplicateResponse = await request(app.getHttpServer())
+      const duplicateResponse = await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'otherpass2' })
         .expect(201);
@@ -225,7 +231,7 @@ describe('Auth Registration (e2e)', () => {
 
   describe('Scenario 2 — Register with confirmation', () => {
     it('creates pending user when confirmation is enabled', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch('/admin/settings/confirmation-policy')
         .set('Cookie', adminCookie)
         .send({ registrationConfirmationEnabled: true })
@@ -233,7 +239,7 @@ describe('Auth Registration (e2e)', () => {
 
       const email = `scenario2-${Date.now()}@example.com`;
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'validpass1' })
         .expect(201);
@@ -258,7 +264,7 @@ describe('Auth Registration (e2e)', () => {
 
       const email = `scenario3-${Date.now()}@example.com`;
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'validpass1' })
         .expect(201);
@@ -280,7 +286,7 @@ describe('Auth Registration (e2e)', () => {
 
       expect(otp).not.toBeNull();
 
-      const confirmResponse = await request(app.getHttpServer())
+      const confirmResponse = await request(baseUrl)
         .post('/auth/register/confirm/code')
         .send({ email, code: otp })
         .expect(200);
@@ -300,7 +306,7 @@ describe('Auth Registration (e2e)', () => {
 
       const email = `scenario4-${Date.now()}@example.com`;
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'validpass1' })
         .expect(201);
@@ -317,14 +323,14 @@ describe('Auth Registration (e2e)', () => {
 
       await challengeRepository.update({ userId: user.id }, { linkTokenHash });
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get(`/auth/register/confirm/link?token=${linkToken}`)
         .expect(200);
 
       const updated = await usersRepository.findOneOrFail({ where: { email } });
       expect(updated.status).toBe(UserStatus.ACTIVE);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get(`/auth/register/confirm/link?token=${linkToken}`)
         .expect(200);
     });
@@ -338,12 +344,12 @@ describe('Auth Registration (e2e)', () => {
 
       const email = `scenario5-${Date.now()}@example.com`;
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'validpass1' })
         .expect(201);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register/resend')
         .send({ email })
         .expect(429);
@@ -352,7 +358,7 @@ describe('Auth Registration (e2e)', () => {
 
   describe('Scenario 6 — Admin policy independence', () => {
     it('recovery flag does not affect registration', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch('/admin/settings/confirmation-policy')
         .set('Cookie', adminCookie)
         .send({ passwordRecoveryConfirmationEnabled: true })
@@ -360,7 +366,7 @@ describe('Auth Registration (e2e)', () => {
 
       const email = `scenario6-${Date.now()}@example.com`;
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'validpass1' })
         .expect(201);
@@ -380,7 +386,7 @@ describe('Auth Registration (e2e)', () => {
 
       for (let i = 0; i < 5; i++) {
         if (i === 0) {
-          await request(app.getHttpServer())
+          await request(baseUrl)
             .post('/auth/register')
             .send({ email, password: 'validpass1' })
             .expect(201);
@@ -401,7 +407,7 @@ describe('Auth Registration (e2e)', () => {
 
           throttlerStorage.storage.clear();
 
-          await request(app.getHttpServer())
+          await request(baseUrl)
             .post('/auth/register/resend')
             .send({ email })
             .expect(200);
@@ -422,7 +428,7 @@ describe('Auth Registration (e2e)', () => {
 
       throttlerStorage.storage.clear();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register/resend')
         .send({ email })
         .expect(429);
@@ -436,7 +442,7 @@ describe('Auth Registration (e2e)', () => {
 
       const email = `scenario8-${Date.now()}@example.com`;
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'validpass1' })
         .expect(201);
@@ -448,7 +454,7 @@ describe('Auth Registration (e2e)', () => {
       expect(issued.attemptsRemaining).toBe(5);
 
       for (let i = 0; i < 3; i++) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/auth/register/confirm/code')
           .send({ email, code: '000000' })
           .expect(400);
@@ -480,7 +486,7 @@ describe('Auth Registration (e2e)', () => {
 
       const email = `scenario8b-${Date.now()}@example.com`;
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register')
         .send({ email, password: 'validpass1' })
         .expect(201);
@@ -501,14 +507,14 @@ describe('Auth Registration (e2e)', () => {
       const wrongCode = otp === '000000' ? '111111' : '000000';
 
       for (let i = 0; i < 5; i++) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/auth/register/confirm/code')
           .send({ email, code: wrongCode })
           .expect(400);
         clearThrottler();
       }
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register/confirm/code')
         .send({ email, code: otp })
         .expect(400);

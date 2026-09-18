@@ -43,12 +43,19 @@ function extractAuthCookies(setCookieHeader: string[] | undefined): string {
   return `${access}; ${refresh}`;
 }
 
-function bruteForceOtp(otpHash: string): string {
+// Yields every 2000 iterations: run flat-out, this blocks the event loop for
+// hundreds of ms, which is long enough to starve a keep-alive HTTP socket
+// mid-suite and surface as ECONNRESET or an HTTP parse error in an unrelated
+// request.
+async function bruteForceOtp(otpHash: string): Promise<string> {
   for (let i = 100000; i < 1000000; i += 1) {
     const code = i.toString();
     const hash = createHash('sha256').update(code).digest('hex');
     if (hash === otpHash) {
       return code;
+    }
+    if (i % 2000 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
     }
   }
   throw new Error('Could not recover OTP from hash');
@@ -56,6 +63,7 @@ function bruteForceOtp(otpHash: string): string {
 
 describe('Auth Login (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let usersRepository: Repository<User>;
   let loginChallengeRepository: Repository<LoginChallenge>;
   let passwordResetChallengeRepository: Repository<PasswordResetChallenge>;
@@ -84,7 +92,12 @@ describe('Auth Login (e2e)', () => {
     });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     usersRepository = moduleFixture.get(getRepositoryToken(User));
     loginChallengeRepository = moduleFixture.get(
@@ -133,7 +146,7 @@ describe('Auth Login (e2e)', () => {
   });
 
   async function registerActiveUser(email: string, password: string) {
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/auth/register')
       .send({ email, password })
       .expect(201);
@@ -145,7 +158,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const loginResponse = await request(app.getHttpServer())
+      const loginResponse = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -165,14 +178,14 @@ describe('Auth Login (e2e)', () => {
 
       const cookies = `${accessCookie}; ${refreshCookie}`;
 
-      const logoutResponse = await request(app.getHttpServer())
+      const logoutResponse = await request(baseUrl)
         .post('/auth/logout')
         .set('Cookie', cookies)
         .expect(200);
 
       expect(logoutResponse.body.message).toBe('Signed out.');
 
-      await request(app.getHttpServer()).post('/auth/logout').expect(200);
+      await request(baseUrl).post('/auth/logout').expect(200);
     });
 
     it('rejects wrong password with a generic 401', async () => {
@@ -180,7 +193,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password: 'wrong-password' })
         .expect(401);
@@ -189,7 +202,7 @@ describe('Auth Login (e2e)', () => {
     });
 
     it('rejects unknown email with the identical generic 401', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/login')
         .send({
           email: `nobody-${Date.now()}@example.com`,
@@ -212,7 +225,7 @@ describe('Auth Login (e2e)', () => {
       const user = await usersRepository.findOneOrFail({ where: { email } });
       expect(user.status).toBe(UserStatus.PENDING_CONFIRMATION);
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(403);
@@ -231,7 +244,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const loginResponse = await request(app.getHttpServer())
+      const loginResponse = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -250,7 +263,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const loginResponse = await request(app.getHttpServer())
+      const loginResponse = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -264,7 +277,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -273,9 +286,9 @@ describe('Auth Login (e2e)', () => {
       const challenge = await loginChallengeRepository.findOneOrFail({
         where: { userId: user.id },
       });
-      const code = bruteForceOtp(challenge.otpHash);
+      const code = await bruteForceOtp(challenge.otpHash);
 
-      const verifyResponse = await request(app.getHttpServer())
+      const verifyResponse = await request(baseUrl)
         .post('/auth/login/verify')
         .send({ email, code })
         .expect(200);
@@ -297,7 +310,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -308,7 +321,7 @@ describe('Auth Login (e2e)', () => {
         [user.id],
       );
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/login/verify')
         .send({ email, code: '000000' })
         .expect(400);
@@ -323,20 +336,20 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
 
       for (let i = 0; i < 5; i += 1) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/auth/login/verify')
           .send({ email, code: '000000' })
           .expect(400);
         clearThrottler();
       }
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/login/verify')
         .send({ email, code: '000000' })
         .expect(400);
@@ -354,14 +367,14 @@ describe('Auth Login (e2e)', () => {
       await registerActiveUser(email, password);
 
       for (let i = 0; i < 5; i += 1) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/auth/login')
           .send({ email, password: 'wrong-password' })
           .expect(401);
         clearThrottler();
       }
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(423);
@@ -383,7 +396,7 @@ describe('Auth Login (e2e)', () => {
       await registerActiveUser(email, password);
 
       for (let i = 0; i < 5; i += 1) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/auth/login')
           .send({ email, password: 'wrong-password' })
           .expect(401);
@@ -395,7 +408,7 @@ describe('Auth Login (e2e)', () => {
         { lockedUntil: new Date(Date.now() - 1000) },
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -413,14 +426,14 @@ describe('Auth Login (e2e)', () => {
       const email = `reset1-${Date.now()}@example.com`;
       await registerActiveUser(email, 'CorrectHorse123!');
 
-      const existingResponse = await request(app.getHttpServer())
+      const existingResponse = await request(baseUrl)
         .post('/auth/password-reset/request')
         .send({ email })
         .expect(200);
 
       clearThrottler();
 
-      const unknownResponse = await request(app.getHttpServer())
+      const unknownResponse = await request(baseUrl)
         .post('/auth/password-reset/request')
         .send({ email: `nobody-${Date.now()}@example.com` })
         .expect(200);
@@ -437,7 +450,7 @@ describe('Auth Login (e2e)', () => {
       const newPassword = 'NewCorrectHorse456!';
       await registerActiveUser(email, oldPassword);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/password-reset/request')
         .send({ email })
         .expect(200);
@@ -446,21 +459,21 @@ describe('Auth Login (e2e)', () => {
       const challenge = await passwordResetChallengeRepository.findOneOrFail({
         where: { userId: user.id },
       });
-      const code = bruteForceOtp(challenge.otpHash);
+      const code = await bruteForceOtp(challenge.otpHash);
 
-      const confirmResponse = await request(app.getHttpServer())
+      const confirmResponse = await request(baseUrl)
         .post('/auth/password-reset/confirm')
         .send({ email, code, newPassword })
         .expect(200);
 
       expect(confirmResponse.body.message).toContain('reset');
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password: oldPassword })
         .expect(401);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password: newPassword })
         .expect(200);
@@ -471,7 +484,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/password-reset/request')
         .send({ email })
         .expect(200);
@@ -482,14 +495,14 @@ describe('Auth Login (e2e)', () => {
         [user.id],
       );
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/password-reset/confirm')
         .send({ email, code: '000000', newPassword: 'AnotherPassword1!' })
         .expect(400);
 
       expect(response.body.message).toContain('Unable to reset password');
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -498,11 +511,11 @@ describe('Auth Login (e2e)', () => {
 
   describe('Route protection (JwtAuthGuard)', () => {
     it('rejects an unauthenticated request with 401', async () => {
-      await request(app.getHttpServer()).get('/rbac/roles').expect(401);
+      await request(baseUrl).get('/rbac/roles').expect(401);
     });
 
     it('rejects a tampered access token cookie with 401', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/roles')
         .set('Cookie', 'access_token=garbage')
         .expect(401);
@@ -513,7 +526,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const loginResponse = await request(app.getHttpServer())
+      const loginResponse = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -521,7 +534,7 @@ describe('Auth Login (e2e)', () => {
         loginResponse.headers['set-cookie'] as unknown as string[],
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/roles')
         .set('Cookie', cookies)
         .expect(403);
@@ -532,7 +545,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const loginResponse = await request(app.getHttpServer())
+      const loginResponse = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -545,7 +558,7 @@ describe('Auth Login (e2e)', () => {
         { status: UserStatus.PENDING_CONFIRMATION },
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/roles')
         .set('Cookie', cookies)
         .expect(401);
@@ -558,7 +571,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const loginResponse = await request(app.getHttpServer())
+      const loginResponse = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -567,7 +580,7 @@ describe('Auth Login (e2e)', () => {
         'refresh_token',
       );
 
-      const refreshResponse = await request(app.getHttpServer())
+      const refreshResponse = await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', refreshCookie)
         .expect(200);
@@ -579,16 +592,14 @@ describe('Auth Login (e2e)', () => {
       const newAccessCookie = extractCookie(newSetCookie, 'access_token');
       const newRefreshCookie = extractCookie(newSetCookie, 'refresh_token');
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/rbac/roles')
         .set('Cookie', `${newAccessCookie}; ${newRefreshCookie}`)
         .expect(403); // authenticated (non-admin), proving the new access token works
     });
 
     it('rejects a missing refresh cookie with 401 and sets no cookies', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/auth/refresh')
-        .expect(401);
+      const response = await request(baseUrl).post('/auth/refresh').expect(401);
 
       expect(response.body).toEqual(
         expect.objectContaining({
@@ -600,7 +611,7 @@ describe('Auth Login (e2e)', () => {
     });
 
     it('rejects a malformed refresh cookie with 401 and sets no cookies', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', 'refresh_token=garbage')
         .expect(401);
@@ -619,7 +630,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const loginResponse = await request(app.getHttpServer())
+      const loginResponse = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -633,7 +644,7 @@ describe('Auth Login (e2e)', () => {
         { status: UserStatus.PENDING_CONFIRMATION },
       );
 
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', refreshCookie)
         .expect(401);
@@ -648,7 +659,7 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      const loginResponse = await request(app.getHttpServer())
+      const loginResponse = await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -656,7 +667,7 @@ describe('Auth Login (e2e)', () => {
         loginResponse.headers['set-cookie'] as unknown as string[],
       );
 
-      const logoutResponse = await request(app.getHttpServer())
+      const logoutResponse = await request(baseUrl)
         .post('/auth/logout')
         .set('Cookie', cookies)
         .expect(200);
@@ -676,7 +687,7 @@ describe('Auth Login (e2e)', () => {
         ),
       ).toBe(true);
 
-      await request(app.getHttpServer()).post('/auth/logout').expect(200);
+      await request(baseUrl).post('/auth/logout').expect(200);
     });
 
     it('leaves an emptied cookie jar unable to reach a protected resource', async () => {
@@ -684,14 +695,14 @@ describe('Auth Login (e2e)', () => {
       const password = 'CorrectHorse123!';
       await registerActiveUser(email, password);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
 
-      await request(app.getHttpServer()).post('/auth/logout').expect(200);
+      await request(baseUrl).post('/auth/logout').expect(200);
 
-      await request(app.getHttpServer()).get('/rbac/roles').expect(401);
+      await request(baseUrl).get('/rbac/roles').expect(401);
     });
   });
   describe('OTP attempt counters (regression)', () => {
@@ -704,7 +715,7 @@ describe('Auth Login (e2e)', () => {
         signInConfirmationEnabled: true,
       });
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);
@@ -716,7 +727,7 @@ describe('Auth Login (e2e)', () => {
       expect(issued.attemptsRemaining).toBe(5);
 
       for (let i = 0; i < 3; i += 1) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/auth/login/verify')
           .send({ email, code: '000000' })
           .expect(400);
@@ -745,7 +756,7 @@ describe('Auth Login (e2e)', () => {
         passwordRecoveryConfirmationEnabled: true,
       });
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/password-reset/request')
         .send({ email })
         .expect(200);
@@ -758,7 +769,7 @@ describe('Auth Login (e2e)', () => {
       expect(issued.attemptsRemaining).toBe(5);
 
       for (let i = 0; i < 3; i += 1) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/auth/password-reset/confirm')
           .send({ email, code: '000000', newPassword: 'AnotherPassword1!' })
           .expect(400);
@@ -786,7 +797,7 @@ describe('Auth Login (e2e)', () => {
       await registerActiveUser(email, password);
 
       for (let i = 0; i < 5; i += 1) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/auth/login')
           .send({ email, password: 'wrong-password' })
           .expect(401);
@@ -798,7 +809,7 @@ describe('Auth Login (e2e)', () => {
         { lockedUntil: new Date(Date.now() - 1000) },
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password: 'wrong-password' })
         .expect(401);
@@ -808,7 +819,7 @@ describe('Auth Login (e2e)', () => {
       expect(user.failedLoginAttempts).toBe(1);
       expect(user.lockedUntil).toBeNull();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email, password })
         .expect(200);

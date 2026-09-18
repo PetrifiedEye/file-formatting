@@ -68,11 +68,18 @@ function extractCookie(
   return cookie.split(';')[0];
 }
 
-function bruteForceOtp(otpHash: string): string {
+// Yields every 2000 iterations: run flat-out, this blocks the event loop for
+// hundreds of ms, which is long enough to starve a keep-alive HTTP socket
+// mid-suite and surface as ECONNRESET or an HTTP parse error in an unrelated
+// request.
+async function bruteForceOtp(otpHash: string): Promise<string> {
   for (let i = 100000; i < 1000000; i++) {
     const code = i.toString();
     if (hashSecret(code) === otpHash) {
       return code;
+    }
+    if (i % 2000 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
     }
   }
   throw new Error('OTP not found');
@@ -80,6 +87,7 @@ function bruteForceOtp(otpHash: string): string {
 
 describe('Account Deletion (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -144,7 +152,12 @@ describe('Account Deletion (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -259,7 +272,7 @@ describe('Account Deletion (e2e)', () => {
     await accessConfigService.reload();
 
     const login = async (user: User) => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .post('/auth/login')
         .send({ email: user.email, password: TEST_PASSWORD })
         .expect(200);
@@ -279,7 +292,7 @@ describe('Account Deletion (e2e)', () => {
 
   describe('Scenario 1 — self-deletion happy path (US1, P1)', () => {
     it('initiates, confirms, and removes the account, photo, and PII', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${selfUser.id}`)
         .set('Cookie', selfCookie)
         .attach('photo', JPEG_BUFFER, 'avatar.jpg')
@@ -299,7 +312,7 @@ describe('Account Deletion (e2e)', () => {
       expect(existsSync(photoAbsolutePath)).toBe(true);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
@@ -308,10 +321,10 @@ describe('Account Deletion (e2e)', () => {
         where: { userId: selfUser.id },
       });
       expect(challenge).not.toBeNull();
-      const otp = bruteForceOtp(challenge!.otpHash);
+      const otp = await bruteForceOtp(challenge!.otpHash);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -330,7 +343,7 @@ describe('Account Deletion (e2e)', () => {
       expect(existsSync(photoAbsolutePath)).toBe(false);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email: selfUser.email, password: TEST_PASSWORD })
         .expect(401);
@@ -354,13 +367,13 @@ describe('Account Deletion (e2e)', () => {
   describe('Scenario 2 — self-deletion rejected without confirmation (US1, AS-3)', () => {
     it('leaves the account untouched when confirmation is never completed', async () => {
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email: selfUser.email, password: TEST_PASSWORD })
         .expect(200);
@@ -370,7 +383,7 @@ describe('Account Deletion (e2e)', () => {
   describe('Scenario 3 — self-deletion confirmation expires (US1, AS-4)', () => {
     it('rejects an expired confirmation and leaves the account active', async () => {
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
@@ -378,12 +391,12 @@ describe('Account Deletion (e2e)', () => {
       const challenge = await challengeRepository.findOne({
         where: { userId: selfUser.id },
       });
-      const otp = bruteForceOtp(challenge!.otpHash);
+      const otp = await bruteForceOtp(challenge!.otpHash);
       challenge!.expiresAt = new Date(Date.now() - 1000);
       await challengeRepository.save(challenge!);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -398,7 +411,7 @@ describe('Account Deletion (e2e)', () => {
 
   describe('Scenario 4 — admin deletes another user directly (US2, P2)', () => {
     it('deletes the target immediately, no confirmation, and audits the admin as actor', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${otherUser.id}`)
         .set('Cookie', adminCookie)
         .expect(200)
@@ -410,7 +423,7 @@ describe('Account Deletion (e2e)', () => {
       expect(deletedUser).toBeNull();
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email: otherUser.email, password: TEST_PASSWORD })
         .expect(401);
@@ -427,13 +440,13 @@ describe('Account Deletion (e2e)', () => {
 
   describe('Scenario 5 — admin re-deletes an already-deleted account (US2, AS-2)', () => {
     it('is idempotent and reports already removed with no error', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${otherUser.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${otherUser.id}`)
         .set('Cookie', adminCookie)
         .expect(200)
@@ -443,13 +456,13 @@ describe('Account Deletion (e2e)', () => {
 
   describe('Scenario 6 — non-admin cannot delete another user (US3, P2)', () => {
     it('rejects with 403 and leaves the target active', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${otherUser.id}`)
         .set('Cookie', nonAdminCookie)
         .expect(403);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email: otherUser.email, password: TEST_PASSWORD })
         .expect(200);
@@ -458,13 +471,13 @@ describe('Account Deletion (e2e)', () => {
 
   describe('Scenario 7 — admin cannot bypass self-confirmation via the admin route', () => {
     it('rejects an admin targeting their own id with 403', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${adminUser.id}`)
         .set('Cookie', adminCookie)
         .expect(403);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email: adminUser.email, password: TEST_PASSWORD })
         .expect(200);
@@ -473,7 +486,7 @@ describe('Account Deletion (e2e)', () => {
 
   describe('Scenario 8 — deletion targeting a nonexistent user', () => {
     it('returns an idempotent already-removed result for an id that never existed', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${randomUUID()}`)
         .set('Cookie', adminCookie)
         .expect(200)
@@ -485,7 +498,7 @@ describe('Account Deletion (e2e)', () => {
     it('rejects a non-UUID id with 400 and writes no audit row', async () => {
       const before = await auditRepository.count();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete('/users/not-a-uuid')
         .set('Cookie', adminCookie)
         .expect(400);
@@ -496,7 +509,7 @@ describe('Account Deletion (e2e)', () => {
     });
 
     it('rejects a non-UUID id on the admin email path with 400', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch('/users/not-a-uuid/email')
         .set('Cookie', adminCookie)
         .send({ email: `renamed-${Date.now()}@example.com` })
@@ -511,7 +524,7 @@ describe('Account Deletion (e2e)', () => {
         { deletionStartedAt: new Date() },
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${otherUser.id}`)
         .set('Cookie', adminCookie)
         .expect(409);
@@ -528,13 +541,13 @@ describe('Account Deletion (e2e)', () => {
     // service-level resend cooldown from the @Throttle decorator. The case
     // below covers the decorator; neither stands in for the other.
     it('rejects a resend before the service cooldown elapses, with the throttler out of the way', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete/resend')
         .set('Cookie', selfCookie)
         .expect(429);
@@ -544,14 +557,14 @@ describe('Account Deletion (e2e)', () => {
       // Deleting ids that never existed is idempotent, so every call inside
       // the limit succeeds and only the throttler can reject the last one.
       for (let i = 0; i < 5; i++) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .delete(`/users/${randomUUID()}`)
           .set('Cookie', adminCookie)
           .expect(200)
           .expect({ message: 'already removed' });
       }
 
-      const throttled = await request(app.getHttpServer())
+      const throttled = await request(baseUrl)
         .delete(`/users/${randomUUID()}`)
         .set('Cookie', adminCookie)
         .expect(429);
@@ -561,7 +574,7 @@ describe('Account Deletion (e2e)', () => {
       // Clearing the throttler is the only thing that changes, proving the
       // rejection came from the decorator and not from any service-side state.
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${randomUUID()}`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -569,18 +582,18 @@ describe('Account Deletion (e2e)', () => {
 
     it('keeps a per-route budget: exhausting the delete route leaves the directory route usable', async () => {
       for (let i = 0; i < 5; i++) {
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .delete(`/users/${randomUUID()}`)
           .set('Cookie', adminCookie)
           .expect(200);
       }
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${randomUUID()}`)
         .set('Cookie', adminCookie)
         .expect(429);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
@@ -631,13 +644,13 @@ describe('Account Deletion (e2e)', () => {
       ).toBeGreaterThan(0);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${oldId}`)
         .set('Cookie', adminCookie)
         .expect(200);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register')
         .send({ email: freedEmail, password: TEST_PASSWORD })
         .expect(201);
@@ -671,26 +684,26 @@ describe('Account Deletion (e2e)', () => {
       const newPassword = 'DifferentHorse456!';
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${selfUser.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/register')
         .send({ email: freedEmail, password: newPassword })
         .expect(201);
 
       // The old credentials must not work against the new account.
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/login')
         .send({ email: freedEmail, password: TEST_PASSWORD })
         .expect(401);
 
       clearThrottler();
-      const login = await request(app.getHttpServer())
+      const login = await request(baseUrl)
         .post('/auth/login')
         .send({ email: freedEmail, password: newPassword })
         .expect(200);
@@ -698,7 +711,7 @@ describe('Account Deletion (e2e)', () => {
       const cookie = extractSessionCookie(
         login.headers['set-cookie'] as unknown as string[],
       );
-      const session = await request(app.getHttpServer())
+      const session = await request(baseUrl)
         .get('/auth/session')
         .set('Cookie', cookie)
         .expect(200);
@@ -727,7 +740,7 @@ describe('Account Deletion (e2e)', () => {
         userRoleRepository.create({ userId: selfUser.id, roleId: role.id }),
       );
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${selfUser.id}`)
         .set('Cookie', selfCookie)
         .attach('photo', JPEG_BUFFER, 'avatar.jpg')
@@ -748,7 +761,7 @@ describe('Account Deletion (e2e)', () => {
       // A second concurrent sign-in, so the cascade has to clear more than
       // just the session doing the deleting.
       clearThrottler();
-      const secondLogin = await request(app.getHttpServer())
+      const secondLogin = await request(baseUrl)
         .post('/auth/login')
         .send({ email: selfUser.email, password: TEST_PASSWORD })
         .expect(200);
@@ -771,14 +784,14 @@ describe('Account Deletion (e2e)', () => {
       );
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: `moved-${Date.now()}-${Math.random()}@example.com` })
         .expect(202);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
@@ -832,10 +845,10 @@ describe('Account Deletion (e2e)', () => {
       const challenge = await challengeRepository.findOneOrFail({
         where: { userId: selfUser.id },
       });
-      const otp = bruteForceOtp(challenge.otpHash);
+      const otp = await bruteForceOtp(challenge.otpHash);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -846,7 +859,7 @@ describe('Account Deletion (e2e)', () => {
       // The other browser's session is gone too, not just the one that
       // confirmed the deletion.
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/auth/session')
         .set('Cookie', secondCookie)
         .expect(401);
@@ -856,7 +869,7 @@ describe('Account Deletion (e2e)', () => {
       const { photoAbsolutePath } = await buildFullFootprint();
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${selfUser.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -873,7 +886,7 @@ describe('Account Deletion (e2e)', () => {
       expect(auditBefore).toBeGreaterThan(0);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${selfUser.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
@@ -890,14 +903,14 @@ describe('Account Deletion (e2e)', () => {
 
   describe('Scenario 12 — a deleted account cannot keep using its live cookies', () => {
     it('rejects the still-unexpired access cookie of a self-deleted user', async () => {
-      const profileBefore = await request(app.getHttpServer())
+      const profileBefore = await request(baseUrl)
         .get(`/users/${selfUser.id}`)
         .set('Cookie', selfCookie)
         .expect(200);
       expect(profileBefore.body.id).toBe(selfUser.id);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
@@ -905,10 +918,10 @@ describe('Account Deletion (e2e)', () => {
       const challenge = await challengeRepository.findOne({
         where: { userId: selfUser.id },
       });
-      const otp = bruteForceOtp(challenge!.otpHash);
+      const otp = await bruteForceOtp(challenge!.otpHash);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -917,14 +930,14 @@ describe('Account Deletion (e2e)', () => {
       // Same cookie, unchanged and nowhere near its expiry. The JWT still
       // verifies; only the server-side user lookup can reject it.
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get(`/users/${selfUser.id}`)
         .set('Cookie', selfCookie)
         .expect(401);
     });
 
     it('rejects the live access and refresh cookies of an admin-deleted user', async () => {
-      const login = await request(app.getHttpServer())
+      const login = await request(baseUrl)
         .post('/auth/login')
         .send({ email: otherUser.email, password: TEST_PASSWORD })
         .expect(200);
@@ -933,19 +946,19 @@ describe('Account Deletion (e2e)', () => {
       const refresh = extractCookie(setCookie, 'refresh_token');
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get(`/users/${otherUser.id}`)
         .set('Cookie', access)
         .expect(200);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${otherUser.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get(`/users/${otherUser.id}`)
         .set('Cookie', access)
         .expect(401);
@@ -953,14 +966,14 @@ describe('Account Deletion (e2e)', () => {
       // The refresh token must not mint a fresh pair either, or deletion
       // would only hold for the access token's short lifetime.
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/auth/refresh')
         .set('Cookie', refresh)
         .expect(401);
     });
 
     it('does not let a deleted user reach an endpoint their id no longer owns', async () => {
-      const login = await request(app.getHttpServer())
+      const login = await request(baseUrl)
         .post('/auth/login')
         .send({ email: otherUser.email, password: TEST_PASSWORD })
         .expect(200);
@@ -970,20 +983,20 @@ describe('Account Deletion (e2e)', () => {
       );
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .delete(`/users/${otherUser.id}`)
         .set('Cookie', adminCookie)
         .expect(200);
 
       // Any authenticated route, not just the one keyed by the deleted id.
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', access)
         .expect(401);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/auth/session')
         .set('Cookie', access)
         .expect(401);
@@ -992,7 +1005,7 @@ describe('Account Deletion (e2e)', () => {
 
   describe('Scenario 11 — wrong confirmation code attempts exhausted', () => {
     it('rejects after 5 wrong codes and rejects the correct one afterward', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete')
         .set('Cookie', selfCookie)
         .expect(202);
@@ -1000,11 +1013,11 @@ describe('Account Deletion (e2e)', () => {
       const challenge = await challengeRepository.findOne({
         where: { userId: selfUser.id },
       });
-      const otp = bruteForceOtp(challenge!.otpHash);
+      const otp = await bruteForceOtp(challenge!.otpHash);
 
       for (let i = 0; i < 5; i++) {
         clearThrottler();
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/users/me/delete/confirm')
           .set('Cookie', selfCookie)
           .send({ code: 'wrong-code' })
@@ -1012,7 +1025,7 @@ describe('Account Deletion (e2e)', () => {
       }
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/delete/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })

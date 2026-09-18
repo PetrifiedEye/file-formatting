@@ -44,6 +44,7 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
 
 describe('RBAC Audit Trail (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -81,7 +82,12 @@ describe('RBAC Audit Trail (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -157,7 +163,7 @@ describe('RBAC Audit Trail (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    const adminLogin = await request(app.getHttpServer())
+    const adminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: adminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -165,7 +171,7 @@ describe('RBAC Audit Trail (e2e)', () => {
       adminLogin.headers['set-cookie'] as unknown as string[],
     );
 
-    const nonAdminLogin = await request(app.getHttpServer())
+    const nonAdminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: nonAdminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -178,25 +184,25 @@ describe('RBAC Audit Trail (e2e)', () => {
   });
 
   it('logs create/update/delete across roles, permissions, and grants, plus reloads', async () => {
-    const roleCreate = await request(app.getHttpServer())
+    const roleCreate = await request(baseUrl)
       .post('/rbac/roles')
       .set('Cookie', adminCookie)
       .send({ name: `audit-role-${Date.now()}` })
       .expect(201);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .patch(`/rbac/roles/${roleCreate.body.id}`)
       .set('Cookie', adminCookie)
       .send({ description: 'updated' })
       .expect(200);
 
-    const permissionCreate = await request(app.getHttpServer())
+    const permissionCreate = await request(baseUrl)
       .post('/rbac/permissions')
       .set('Cookie', adminCookie)
       .send({ name: `audit-perm-${Date.now()}`, actions: ['read'] })
       .expect(201);
 
-    const grantCreate = await request(app.getHttpServer())
+    const grantCreate = await request(baseUrl)
       .post('/rbac/grants')
       .set('Cookie', adminCookie)
       .send({
@@ -205,7 +211,7 @@ describe('RBAC Audit Trail (e2e)', () => {
       })
       .expect(201);
 
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .delete(`/rbac/grants/${grantCreate.body.id}`)
       .set('Cookie', adminCookie)
       .expect(204);
@@ -242,7 +248,7 @@ describe('RBAC Audit Trail (e2e)', () => {
   });
 
   it('logs management_access_denied for a non-admin management attempt', async () => {
-    await request(app.getHttpServer())
+    await request(baseUrl)
       .post('/rbac/roles')
       .set('Cookie', nonAdminCookie)
       .send({ name: `denied-${Date.now()}` })

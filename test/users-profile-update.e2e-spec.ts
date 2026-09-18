@@ -50,11 +50,18 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
   return cookie.split(';')[0];
 }
 
-function bruteForceOtp(otpHash: string): string {
+// Yields every 2000 iterations: run flat-out, this blocks the event loop for
+// hundreds of ms, which is long enough to starve a keep-alive HTTP socket
+// mid-suite and surface as ECONNRESET or an HTTP parse error in an unrelated
+// request.
+async function bruteForceOtp(otpHash: string): Promise<string> {
   for (let i = 100000; i < 1000000; i++) {
     const code = i.toString();
     if (hashSecret(code) === otpHash) {
       return code;
+    }
+    if (i % 2000 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
     }
   }
   throw new Error('OTP not found');
@@ -62,6 +69,7 @@ function bruteForceOtp(otpHash: string): string {
 
 describe('Users Profile Update (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
   let grantRepository: Repository<Grant>;
@@ -120,7 +128,12 @@ describe('Users Profile Update (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -217,7 +230,7 @@ describe('Users Profile Update (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    const selfLogin = await request(app.getHttpServer())
+    const selfLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: selfUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -225,7 +238,7 @@ describe('Users Profile Update (e2e)', () => {
       selfLogin.headers['set-cookie'] as unknown as string[],
     );
 
-    const adminLogin = await request(app.getHttpServer())
+    const adminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: adminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -240,7 +253,7 @@ describe('Users Profile Update (e2e)', () => {
 
   describe('Scenario 1 & 5 — self photo update, IDOR/RBAC (US1)', () => {
     it('lets self upload a new photo', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .patch(`/users/${selfUser.id}`)
         .set('Cookie', selfCookie)
         .attach('photo', JPEG_BUFFER, 'avatar.jpg')
@@ -255,7 +268,7 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('rejects an email field in the general update request with no field changed', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${selfUser.id}`)
         .set('Cookie', selfCookie)
         .field('email', 'new@example.com')
@@ -268,7 +281,7 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('rejects a non-admin updating another user (IDOR)', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${otherUser.id}`)
         .set('Cookie', selfCookie)
         .attach('photo', JPEG_BUFFER, 'avatar.jpg')
@@ -276,14 +289,14 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('rejects an unauthenticated request', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${selfUser.id}`)
         .attach('photo', JPEG_BUFFER, 'avatar.jpg')
         .expect(401);
     });
 
     it('returns 404 for a nonexistent userId targeted by an admin', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${randomUUID()}`)
         .set('Cookie', adminCookie)
         .attach('photo', JPEG_BUFFER, 'avatar.jpg')
@@ -293,7 +306,7 @@ describe('Users Profile Update (e2e)', () => {
 
   describe('Scenario 3 — self email-change confirmation flow (US2)', () => {
     it('initiates, confirms, and updates the email', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: 'new-self@example.com' })
@@ -303,10 +316,10 @@ describe('Users Profile Update (e2e)', () => {
         where: { userId: selfUser.id },
       });
       expect(challenge).not.toBeNull();
-      const otp = bruteForceOtp(challenge!.otpHash);
+      const otp = await bruteForceOtp(challenge!.otpHash);
 
       clearThrottler();
-      const confirmResponse = await request(app.getHttpServer())
+      const confirmResponse = await request(baseUrl)
         .post('/users/me/email-change/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -321,21 +334,21 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('rejects a resend before the cooldown elapses', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: 'resend-test@example.com' })
         .expect(202);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change/resend')
         .set('Cookie', selfCookie)
         .expect(429);
     });
 
     it('exhausts attempts after 5 wrong codes and rejects the correct one after', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: 'wrong-code-test@example.com' })
@@ -344,11 +357,11 @@ describe('Users Profile Update (e2e)', () => {
       const challenge = await challengeRepository.findOne({
         where: { userId: selfUser.id },
       });
-      const otp = bruteForceOtp(challenge!.otpHash);
+      const otp = await bruteForceOtp(challenge!.otpHash);
 
       for (let i = 0; i < 5; i++) {
         clearThrottler();
-        await request(app.getHttpServer())
+        await request(baseUrl)
           .post('/users/me/email-change/confirm')
           .set('Cookie', selfCookie)
           .send({ code: 'wrong-code' })
@@ -356,7 +369,7 @@ describe('Users Profile Update (e2e)', () => {
       }
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -364,7 +377,7 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('rejects an expired challenge', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: 'expired-test@example.com' })
@@ -373,12 +386,12 @@ describe('Users Profile Update (e2e)', () => {
       const challenge = await challengeRepository.findOne({
         where: { userId: selfUser.id },
       });
-      const otp = bruteForceOtp(challenge!.otpHash);
+      const otp = await bruteForceOtp(challenge!.otpHash);
       challenge!.expiresAt = new Date(Date.now() - 1000);
       await challengeRepository.save(challenge!);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -386,7 +399,7 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('invalidates the first challenge when a second initiate is made', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: 'first@example.com' })
@@ -394,17 +407,17 @@ describe('Users Profile Update (e2e)', () => {
       const firstChallenge = await challengeRepository.findOne({
         where: { userId: selfUser.id },
       });
-      const firstOtp = bruteForceOtp(firstChallenge!.otpHash);
+      const firstOtp = await bruteForceOtp(firstChallenge!.otpHash);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: 'second@example.com' })
         .expect(202);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change/confirm')
         .set('Cookie', selfCookie)
         .send({ code: firstOtp })
@@ -422,7 +435,7 @@ describe('Users Profile Update (e2e)', () => {
       const contestedEmail = `contested-${Date.now()}-${Math.random()}@example.com`;
 
       // selfUser gets a confirmation code for the contested address...
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: contestedEmail })
@@ -431,11 +444,11 @@ describe('Users Profile Update (e2e)', () => {
       const challenge = await challengeRepository.findOneOrFail({
         where: { userId: selfUser.id },
       });
-      const otp = bruteForceOtp(challenge.otpHash);
+      const otp = await bruteForceOtp(challenge.otpHash);
 
       // ...but otherUser takes the address first, via the admin route.
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${otherUser.id}/email`)
         .set('Cookie', adminCookie)
         .send({ email: contestedEmail })
@@ -444,7 +457,7 @@ describe('Users Profile Update (e2e)', () => {
       await profileAuditRepository.createQueryBuilder().delete().execute();
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -474,7 +487,7 @@ describe('Users Profile Update (e2e)', () => {
     it('audits a conflict the same way the wrong-code path does', async () => {
       const contestedEmail = `contested2-${Date.now()}-${Math.random()}@example.com`;
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change')
         .set('Cookie', selfCookie)
         .send({ newEmail: contestedEmail })
@@ -483,14 +496,14 @@ describe('Users Profile Update (e2e)', () => {
       const challenge = await challengeRepository.findOneOrFail({
         where: { userId: selfUser.id },
       });
-      const otp = bruteForceOtp(challenge.otpHash);
+      const otp = await bruteForceOtp(challenge.otpHash);
 
       await profileAuditRepository.createQueryBuilder().delete().execute();
 
       // A wrong code is rejected outside any transaction, and has always
       // audited. Count its rows as the baseline.
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change/confirm')
         .set('Cookie', selfCookie)
         .send({ code: '000000' })
@@ -502,14 +515,14 @@ describe('Users Profile Update (e2e)', () => {
       expect(afterWrongCode).toBe(1);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${otherUser.id}/email`)
         .set('Cookie', adminCookie)
         .send({ email: contestedEmail })
         .expect(200);
 
       clearThrottler();
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .post('/users/me/email-change/confirm')
         .set('Cookie', selfCookie)
         .send({ code: otp })
@@ -525,7 +538,7 @@ describe('Users Profile Update (e2e)', () => {
 
   describe('Scenario 4 — admin direct email update (US3)', () => {
     it('lets an admin update another user email immediately, no OTP', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(baseUrl)
         .patch(`/users/${otherUser.id}/email`)
         .set('Cookie', adminCookie)
         .send({ email: 'admin-set@example.com' })
@@ -540,7 +553,7 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('forbids an admin from targeting their own account', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${adminUser.id}/email`)
         .set('Cookie', adminCookie)
         .send({ email: 'self-set@example.com' })
@@ -548,7 +561,7 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('forbids a non-admin caller', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${otherUser.id}/email`)
         .set('Cookie', selfCookie)
         .send({ email: 'nope@example.com' })
@@ -556,7 +569,7 @@ describe('Users Profile Update (e2e)', () => {
     });
 
     it('returns 404 for a nonexistent target', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch(`/users/${randomUUID()}/email`)
         .set('Cookie', adminCookie)
         .send({ email: 'nope@example.com' })

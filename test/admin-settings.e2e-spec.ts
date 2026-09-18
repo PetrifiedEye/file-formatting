@@ -45,6 +45,7 @@ function extractSessionCookie(setCookieHeader: string[] | undefined): string {
 
 describe('Admin Settings authorization and audit (e2e)', () => {
   let app: INestApplication<App>;
+  let baseUrl: string;
   let userRepository: Repository<User>;
   let roleRepository: Repository<Role>;
   let permissionRepository: Repository<Permission>;
@@ -84,7 +85,12 @@ describe('Admin Settings authorization and audit (e2e)', () => {
       });
 
     await app.init();
+    // Listen for real: concurrent supertest calls against one un-listened
+    // server object interleave onto the same ephemeral socket and produce
+    // bogus parse errors.
+    await app.listen(0, '127.0.0.1');
     await app.getHttpAdapter().getInstance().ready();
+    baseUrl = await app.getUrl();
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
@@ -170,7 +176,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
     );
     await accessConfigService.reload();
 
-    const adminLogin = await request(app.getHttpServer())
+    const adminLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: adminUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -178,7 +184,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
       adminLogin.headers['set-cookie'] as unknown as string[],
     );
 
-    const plainLogin = await request(app.getHttpServer())
+    const plainLogin = await request(baseUrl)
       .post('/auth/login')
       .send({ email: plainUser.email, password: TEST_PASSWORD })
       .expect(200);
@@ -189,13 +195,13 @@ describe('Admin Settings authorization and audit (e2e)', () => {
 
   describe('authorization', () => {
     it('rejects an unauthenticated caller with 401', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/admin/settings/confirmation-policy')
         .expect(401);
     });
 
     it('rejects a signed-in user without settings:manage with 403', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch('/admin/settings/confirmation-policy')
         .set('Cookie', plainCookie)
         .send({ signInConfirmationEnabled: true })
@@ -203,7 +209,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
     });
 
     it('allows a role holding the settings:manage grant', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/admin/settings/confirmation-policy')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -214,7 +220,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
       await grantRepository.delete(settingsGrantId);
       await accessConfigService.reload();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch('/admin/settings/confirmation-policy')
         .set('Cookie', adminCookie)
         .send({ signInConfirmationEnabled: true })
@@ -227,7 +233,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
       });
       await accessConfigService.reload();
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/admin/settings/confirmation-policy')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -258,12 +264,12 @@ describe('Admin Settings authorization and audit (e2e)', () => {
       );
       await accessConfigService.reload();
 
-      const login = await request(app.getHttpServer())
+      const login = await request(baseUrl)
         .post('/auth/login')
         .send({ email: opsUser.email, password: TEST_PASSWORD })
         .expect(200);
 
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/admin/settings/confirmation-policy')
         .set(
           'Cookie',
@@ -277,7 +283,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
 
   describe('audit trail', () => {
     it('records who changed the policy, with before and after values', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch('/admin/settings/confirmation-policy')
         .set('Cookie', adminCookie)
         .send({ signInConfirmationEnabled: true, passwordMinLength: 12 })
@@ -298,7 +304,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
     });
 
     it('writes no audit row for a read', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .get('/admin/settings/confirmation-policy')
         .set('Cookie', adminCookie)
         .expect(200);
@@ -307,7 +313,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
     });
 
     it('writes no audit row for a request the guard rejected', async () => {
-      await request(app.getHttpServer())
+      await request(baseUrl)
         .patch('/admin/settings/confirmation-policy')
         .set('Cookie', plainCookie)
         .send({ signInConfirmationEnabled: true })

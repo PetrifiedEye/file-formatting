@@ -225,12 +225,18 @@ export class PasswordResetService {
     const invalidatedAt = new Date();
     const active = { userId, invalidatedAt: IsNull(), consumedAt: IsNull() };
 
-    await Promise.all([
-      this.loginChallengeRepository.update(active, { invalidatedAt }),
-      this.confirmationChallengeRepository.update(active, { invalidatedAt }),
-      this.emailChangeChallengeRepository.update(active, { invalidatedAt }),
-      this.accountDeletionChallengeRepository.update(active, { invalidatedAt }),
-    ]);
+    // Sequential, not Promise.all: this runs inside the @Transactional()
+    // caller's single connection, and firing these concurrently on it made
+    // node-postgres queue overlapping queries on the same client — the
+    // source of intermittent ECONNRESET failures across the e2e suite.
+    await this.loginChallengeRepository.update(active, { invalidatedAt });
+    await this.confirmationChallengeRepository.update(active, {
+      invalidatedAt,
+    });
+    await this.emailChangeChallengeRepository.update(active, { invalidatedAt });
+    await this.accountDeletionChallengeRepository.update(active, {
+      invalidatedAt,
+    });
   }
 
   async exchangeLinkToken(token: string): Promise<ExchangedLinkToken> {
