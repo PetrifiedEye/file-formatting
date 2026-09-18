@@ -1,6 +1,7 @@
 import { Readable } from 'stream';
 
 import { ImageFormat } from '@/modules/conversion/conversion.enums';
+import { ConversionRetentionOutcome } from '@/modules/conversion/conversion.enums';
 import { ConversionHistoryService } from '@/modules/conversion/conversion-history.service';
 import { ConversionRetentionService } from '@/modules/conversion/conversion-retention.service';
 
@@ -32,7 +33,12 @@ import { ImageFormatRegistryService } from './image-format-registry.service';
 export interface ServiceHarness {
   service: ImageConversionService;
   history: { record: jest.Mock };
-  retention: { store: jest.Mock; attach: jest.Mock; discard: jest.Mock };
+  retention: {
+    finalize: jest.Mock;
+    store: jest.Mock;
+    attach: jest.Mock;
+    discard: jest.Mock;
+  };
   limits: ImageConversionLimits;
 }
 
@@ -52,6 +58,11 @@ export function buildService(
 
   const history = { record: jest.fn().mockResolvedValue('record-1') };
   const retention = {
+    finalize: jest.fn().mockResolvedValue({
+      retentionOutcome: ConversionRetentionOutcome.NOT_REQUESTED,
+      storedFileId: null,
+      auditOutcome: null,
+    }),
     store: jest.fn(),
     attach: jest.fn().mockResolvedValue(true),
     discard: jest.fn().mockResolvedValue(undefined),

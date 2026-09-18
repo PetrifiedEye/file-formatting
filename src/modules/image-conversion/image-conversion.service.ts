@@ -11,10 +11,7 @@ import {
 } from '@/modules/conversion/conversion.enums';
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 import { ConversionHistoryService } from '@/modules/conversion/conversion-history.service';
-import {
-  ConversionRetentionService,
-  StoredFile,
-} from '@/modules/conversion/conversion-retention.service';
+import { ConversionRetentionService } from '@/modules/conversion/conversion-retention.service';
 import { UploadReader } from '@/modules/conversion/upload-reader';
 
 import { ConvertImageRequestDto } from './dto/convert-image-request.dto';
@@ -148,7 +145,6 @@ export class ImageConversionService {
     };
 
     let result: ImageConversionResult | undefined;
-    let stored: StoredFile | null = null;
     let failure: unknown;
 
     try {
@@ -156,19 +152,9 @@ export class ImageConversionService {
 
       result = await this.convert(collected.received, collected.targetFormat);
 
-      // Nothing is kept for a conversion that did not succeed (FR-029), so
-      // this only ever runs once there is a valid result.
       if (state.retentionRequested) {
-        stored = await this.retention.store({
-          userId,
-          format: result.targetFormat,
-          extension: result.extension,
-          buffer: result.buffer,
-        });
-
-        result.retentionOutcome = stored
-          ? ConversionRetentionOutcome.STORED
-          : ConversionRetentionOutcome.FAILED;
+        // Pessimistic until history-first finalization durably links the file.
+        result.retentionOutcome = ConversionRetentionOutcome.FAILED;
       }
 
       return result;
@@ -182,26 +168,57 @@ export class ImageConversionService {
       // the record of the attempt. It claims `failed` for a file that is on
       // disk but not yet linked: pessimistic until the link exists, and
       // already correct if the link never does.
-      const recordId = await this.history.record({
-        userId,
-        transformationType: TransformationType.IMAGE,
-        originalFileName: state.originalFileName,
-        sourceFormat: state.sourceFormat,
-        targetFormat: state.targetFormat,
-        inputSizeBytes: state.inputSizeBytes,
-        outputSizeBytes: result ? result.buffer.length : null,
-        retentionRequested: state.retentionRequested,
-        retentionOutcome: state.retentionRequested
-          ? ConversionRetentionOutcome.FAILED
-          : ConversionRetentionOutcome.NOT_REQUESTED,
-        storedFileId: null,
-        startedAt,
-        durationMs,
-        failure,
-      });
+      let recordId: string | null = null;
 
-      if (stored && result) {
-        result.retentionOutcome = await this.attach(recordId, stored);
+      try {
+        recordId = await this.history.record({
+          userId,
+          transformationType: TransformationType.IMAGE,
+          originalFileName: state.originalFileName,
+          sourceFormat: state.sourceFormat,
+          targetFormat: state.targetFormat,
+          inputSizeBytes: state.inputSizeBytes,
+          outputSizeBytes: result ? result.buffer.length : null,
+          retentionRequested: state.retentionRequested,
+          retentionOutcome: state.retentionRequested
+            ? ConversionRetentionOutcome.FAILED
+            : ConversionRetentionOutcome.NOT_REQUESTED,
+          storedFileId: null,
+          startedAt,
+          durationMs,
+          failure,
+        });
+      } catch (historyError) {
+        this.logger.error(
+          'Failed to record image conversion history',
+          historyError as Error,
+        );
+      }
+
+      try {
+        const finalized = await this.retention.finalize({
+          userId,
+          conversionRecordId: recordId,
+          retentionRequested: state.retentionRequested,
+          result: result
+            ? {
+                userId,
+                format: result.targetFormat,
+                extension: result.extension,
+                buffer: result.buffer,
+              }
+            : null,
+          maxSizeBytes: this.limits.maxOutputBytes,
+        });
+
+        if (result) {
+          result.retentionOutcome = finalized.retentionOutcome;
+        }
+      } catch (retentionError) {
+        this.logger.error(
+          'Failed to finalize image conversion retention',
+          retentionError as Error,
+        );
       }
 
       this.log(userId, state, failure, durationMs);
@@ -541,32 +558,6 @@ export class ImageConversionService {
       }
 
       throw error;
-    }
-  }
-
-  /**
-   * Link a stored file to its conversion record, or drop it.
-   *
-   * A storage or bookkeeping failure never becomes a conversion failure: the
-   * caller still receives a valid image, and both the response header and the
-   * history row say `failed` (FR-031).
-   */
-  private async attach(
-    recordId: string | null,
-    stored: StoredFile,
-  ): Promise<ConversionRetentionOutcome> {
-    if (recordId === null) {
-      // No record to attach to; the file would be unreachable forever.
-      await this.retention.discard(stored);
-      return ConversionRetentionOutcome.FAILED;
-    }
-
-    try {
-      await this.retention.attach(recordId, stored);
-      return ConversionRetentionOutcome.STORED;
-    } catch {
-      await this.retention.discard(stored);
-      return ConversionRetentionOutcome.FAILED;
     }
   }
 

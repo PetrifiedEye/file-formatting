@@ -114,6 +114,12 @@ export interface Config {
   CONVERSION_STORAGE_DIR: string;
 
   /**
+   * Delay between expired transformation-history cleanup cycles.
+   * 0 disables the in-process scheduler.
+   */
+  TRANSFORMATION_RETENTION_CLEANUP_INTERVAL_MS?: number;
+
+  /**
    * Image conversion limits.
    *
    * The input ceiling is per source format for the same reason the text

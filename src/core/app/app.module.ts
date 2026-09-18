@@ -14,6 +14,7 @@ import { ImageConversionModule } from '@/modules/image-conversion/image-conversi
 import { RbacModule } from '@/modules/rbac/rbac.module';
 import { SettingsModule } from '@/modules/settings/settings.module';
 import { TransformationHistoryModule } from '@/modules/transformation-history/transformation-history.module';
+import { TransformationResultStorageModule } from '@/modules/transformation-result-storage/transformation-result-storage.module';
 import { UsersModule } from '@/modules/users/users.module';
 
 @Module({
@@ -30,6 +31,7 @@ import { UsersModule } from '@/modules/users/users.module';
     ConversionModule,
     ImageConversionModule,
     TransformationHistoryModule,
+    TransformationResultStorageModule,
   ],
   providers: [
     {

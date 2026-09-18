@@ -1,11 +1,22 @@
 import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
-import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBadRequestResponse,
+  ApiForbiddenResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+  ApiUnauthorizedResponse,
+} from '@nestjs/swagger';
 
 import { SettingsService } from './settings.service';
 import {
   ConfirmationPolicyResponseDto,
   UpdateConfirmationPolicyRequestDto,
 } from './dto/confirmation-policy-response.dto';
+import {
+  TransformationRetentionPolicyResponseDto,
+  UpdateTransformationRetentionPolicyRequestDto,
+} from './dto/transformation-retention-policy.dto';
 import { AdminGuard } from './guards/admin.guard';
 
 interface RequestWithActor {
@@ -29,6 +40,33 @@ function extractActor(req: RequestWithActor) {
 @UseGuards(AdminGuard)
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
+
+  @Get('transformation-retention')
+  @ApiOperation({ summary: 'Read transformation history retention policy' })
+  @ApiOkResponse({ type: TransformationRetentionPolicyResponseDto })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiForbiddenResponse({ description: 'Insufficient permissions' })
+  async getTransformationRetentionPolicy(): Promise<TransformationRetentionPolicyResponseDto> {
+    return this.settingsService.getTransformationRetentionPolicy();
+  }
+
+  @Patch('transformation-retention')
+  @ApiOperation({ summary: 'Update transformation history retention policy' })
+  @ApiOkResponse({ type: TransformationRetentionPolicyResponseDto })
+  @ApiBadRequestResponse({
+    description: 'retentionDays must be an integer from 1 through 3650',
+  })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  @ApiForbiddenResponse({ description: 'Insufficient permissions' })
+  async updateTransformationRetentionPolicy(
+    @Body() dto: UpdateTransformationRetentionPolicyRequestDto,
+    @Req() req: RequestWithActor,
+  ): Promise<TransformationRetentionPolicyResponseDto> {
+    return this.settingsService.updateTransformationRetentionPolicy(
+      dto,
+      extractActor(req),
+    );
+  }
 
   @Get('confirmation-policy')
   @ApiOperation({ summary: 'Read confirmation and password policy' })

@@ -118,6 +118,11 @@ function controllerWith(
 } {
   const registry = new FormatRegistryService(handlers, limits);
   const retention = {
+    finalize: jest.fn().mockResolvedValue({
+      retentionOutcome: 'not_requested',
+      storedFileId: null,
+      auditOutcome: null,
+    }),
     store: jest.fn().mockResolvedValue(null),
     attach: jest.fn().mockResolvedValue(true),
     discard: jest.fn().mockResolvedValue(undefined),
@@ -302,12 +307,10 @@ describe('ConversionController', () => {
       async (_label, requested, expected) => {
         const { controller, retention } = controllerWith();
         if (requested) {
-          (retention.store as jest.Mock).mockResolvedValue({
-            id: 'file-1',
-            userId: 'user-1',
-            format: 'json',
-            sizeBytes: 10,
-            storagePath: 'user-1/file-1.json',
+          (retention.finalize as jest.Mock).mockResolvedValue({
+            retentionOutcome: 'stored',
+            storedFileId: 'file-1',
+            auditOutcome: 'success',
           });
         }
 
@@ -330,7 +333,11 @@ describe('ConversionController', () => {
       // FR-028: the conversion succeeded, so withholding the result would be
       // the worse lie. The header carries the bad news instead.
       const { controller, retention } = controllerWith();
-      (retention.store as jest.Mock).mockResolvedValue(null);
+      (retention.finalize as jest.Mock).mockResolvedValue({
+        retentionOutcome: 'failed',
+        storedFileId: null,
+        auditOutcome: 'storage_failed',
+      });
       const { reply, headers, sent, statuses } = replySpy();
 
       await controller.convert(

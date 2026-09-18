@@ -157,6 +157,11 @@ export const configValidationSchema = Joi.object<Config>({
     .min(1)
     .optional()
     .default('./storage/conversions'),
+  TRANSFORMATION_RETENTION_CLEANUP_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(0)
+    .optional()
+    .default(3600000),
 
   /**
    * Image conversion limits.

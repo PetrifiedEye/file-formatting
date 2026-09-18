@@ -5,6 +5,11 @@ import { Repository } from 'typeorm';
 import { Transactional } from 'typeorm-transactional';
 
 import { ConversionFileStorageService } from '@/core/storage/conversion-file-storage.service';
+import { TransformationResultAuditService } from '@/modules/transformation-result-storage/transformation-result-audit.service';
+import {
+  TransformationResultAuditAction,
+  TransformationResultAuditOutcome,
+} from '@/modules/transformation-result-storage/transformation-result.enums';
 
 import { ConversionRetentionOutcome, RecordedFormat } from './conversion.enums';
 import { ConversionRecord } from './entities/conversion-record.entity';
@@ -15,6 +20,26 @@ export interface RetentionRequest {
   format: RecordedFormat;
   extension: string;
   buffer: Buffer;
+}
+
+export interface RetentionFinalizationRequest {
+  userId: string;
+  conversionRecordId: string | null;
+  retentionRequested: boolean;
+  /**
+   * A successful conversion result. `null` means the conversion failed before
+   * a retainable result existed.
+   */
+  result: RetentionRequest | null;
+  /** The applicable document/image output limit. */
+  maxSizeBytes: number;
+}
+
+export interface RetentionFinalizationResult {
+  retentionOutcome: ConversionRetentionOutcome;
+  storedFileId: string | null;
+  /** Null only when retention was not requested and therefore no save existed. */
+  auditOutcome: TransformationResultAuditOutcome | null;
 }
 
 /** A result already on disk, not yet attached to its conversion. */
@@ -45,7 +70,121 @@ export class ConversionRetentionService {
     @InjectRepository(ConversionRecord)
     private readonly records: Repository<ConversionRecord>,
     private readonly storage: ConversionFileStorageService,
+    private readonly audit: TransformationResultAuditService,
   ) {}
+
+  /**
+   * Finalize one recognized save intent after its history row was attempted.
+   *
+   * This is the only save orchestration used by either conversion family:
+   * validate the family-specific output bound, write privately, attach in one
+   * database transaction, compensate an attach failure, and write exactly one
+   * best-effort audit event. No failure escapes to replace conversion output.
+   */
+  async finalize(
+    request: RetentionFinalizationRequest,
+  ): Promise<RetentionFinalizationResult> {
+    if (!request.retentionRequested) {
+      return {
+        retentionOutcome: ConversionRetentionOutcome.NOT_REQUESTED,
+        storedFileId: null,
+        auditOutcome: null,
+      };
+    }
+
+    const startedMs = Date.now();
+    const fileSizeBytes = request.result?.buffer.length ?? null;
+    let retentionOutcome = ConversionRetentionOutcome.FAILED;
+    let storedFileId: string | null = null;
+    let auditOutcome: TransformationResultAuditOutcome;
+
+    if (request.result === null) {
+      auditOutcome = TransformationResultAuditOutcome.CONVERSION_FAILED;
+    } else if (request.result.buffer.length > request.maxSizeBytes) {
+      auditOutcome = TransformationResultAuditOutcome.SIZE_EXCEEDED;
+    } else if (request.conversionRecordId === null) {
+      // Without a history row a stored file could never be reached or cleaned.
+      auditOutcome = TransformationResultAuditOutcome.HISTORY_UNAVAILABLE;
+    } else {
+      const stored = await this.storeSafely(request.result);
+
+      if (stored === null) {
+        auditOutcome = TransformationResultAuditOutcome.STORAGE_FAILED;
+      } else {
+        storedFileId = stored.id;
+
+        if (await this.attachSafely(request.conversionRecordId, stored)) {
+          retentionOutcome = ConversionRetentionOutcome.STORED;
+          auditOutcome = TransformationResultAuditOutcome.SUCCESS;
+        } else {
+          auditOutcome = TransformationResultAuditOutcome.ATTACH_FAILED;
+          await this.discardSafely(stored);
+        }
+      }
+    }
+
+    await this.auditSafely({
+      actorUserId: request.userId,
+      conversionRecordId: request.conversionRecordId,
+      storedFileId,
+      action: TransformationResultAuditAction.SAVE,
+      outcome: auditOutcome,
+      fileSizeBytes,
+      durationMs: Math.max(0, Date.now() - startedMs),
+    });
+
+    return { retentionOutcome, storedFileId, auditOutcome };
+  }
+
+  private async storeSafely(
+    request: RetentionRequest,
+  ): Promise<StoredFile | null> {
+    try {
+      return await this.store(request);
+    } catch (error) {
+      // `store` is already non-throwing, but this boundary also contains test
+      // doubles and future storage implementations that violate that contract.
+      this.logger.error('Failed to store a converted result', error as Error);
+      return null;
+    }
+  }
+
+  private async attachSafely(
+    conversionRecordId: string,
+    stored: StoredFile,
+  ): Promise<boolean> {
+    try {
+      return await this.attach(conversionRecordId, stored);
+    } catch {
+      return false;
+    }
+  }
+
+  private async discardSafely(stored: StoredFile): Promise<void> {
+    try {
+      await this.discard(stored);
+    } catch (error) {
+      this.logger.error(
+        `Failed to discard an unattached converted file ${stored.id}`,
+        error as Error,
+      );
+    }
+  }
+
+  private async auditSafely(
+    input: Parameters<TransformationResultAuditService['record']>[0],
+  ): Promise<void> {
+    try {
+      await this.audit.record(input);
+    } catch (error) {
+      // The collaborator is specified as non-throwing; keep this boundary
+      // defensive so an audit regression can never alter conversion output.
+      this.logger.error(
+        'Failed to audit conversion result retention',
+        error as Error,
+      );
+    }
+  }
 
   /**
    * Write the result to disk.

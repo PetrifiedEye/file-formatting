@@ -1,12 +1,23 @@
-import { mkdtemp, readFile, rm, stat } from 'fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import { buffer, text } from 'stream/consumers';
 
 import { Logger } from '@nestjs/common';
 
 import { ConfigService } from '@/core/config/config.service';
 
 import {
+  ConversionStorageFileMissingError,
+  ConversionStorageReadError,
   ConversionFileStorageService,
   ConversionStorageError,
 } from './conversion-file-storage.service';
@@ -127,6 +138,109 @@ describe('ConversionFileStorageService', () => {
       await expect(
         service.delete(join('user-1', 'missing.json')),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('openForRead', () => {
+    it('returns an exact stat and a descriptor-backed stream', async () => {
+      const bytes = Buffer.from('descriptor-backed');
+      const path = await service.save('user-1', 'a', 'json', bytes);
+
+      const opened = await service.openForRead(path);
+
+      expect(opened.size).toBe(bytes.length);
+      await expect(buffer(opened.stream)).resolves.toEqual(bytes);
+    });
+
+    it('opens an independent descriptor for every repeated read', async () => {
+      const path = await service.save(
+        'user-1',
+        'a',
+        'json',
+        Buffer.from('same bytes'),
+      );
+
+      const first = await service.openForRead(path);
+      const second = await service.openForRead(path);
+
+      await expect(
+        Promise.all([text(first.stream), text(second.stream)]),
+      ).resolves.toEqual(['same bytes', 'same bytes']);
+    });
+
+    it('keeps reading the opened descriptor after the path is removed', async () => {
+      const path = await service.save(
+        'user-1',
+        'a',
+        'json',
+        Buffer.from('already open'),
+      );
+      const opened = await service.openForRead(path);
+      await service.remove(path);
+
+      await expect(text(opened.stream)).resolves.toBe('already open');
+    });
+
+    it.each(['../outside', '/tmp/outside', '', '.'])(
+      'rejects a path that is not a contained file: %s',
+      async (path) => {
+        await expect(service.openForRead(path)).rejects.toBeInstanceOf(
+          ConversionStorageReadError,
+        );
+      },
+    );
+
+    it('classifies a missing contained path without leaking it', async () => {
+      await expect(
+        service.openForRead(join('user-1', 'missing.json')),
+      ).rejects.toEqual(
+        expect.objectContaining({
+          name: ConversionStorageFileMissingError.name,
+          message: 'Stored conversion file is missing',
+        }),
+      );
+    });
+
+    it('classifies a non-file target as an unexpected read failure', async () => {
+      await service.save('user-1', 'a', 'json', Buffer.from('{}'));
+
+      await expect(service.openForRead('user-1')).rejects.toBeInstanceOf(
+        ConversionStorageReadError,
+      );
+    });
+
+    it('rejects an ancestor symlink that escapes the storage root', async () => {
+      const outside = join(resolve(root, '..'), 'outside');
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(outside, 'secret.json'), 'secret');
+      await mkdir(root, { recursive: true });
+      await symlink(outside, join(root, 'linked-owner'));
+
+      await expect(
+        service.openForRead('linked-owner/secret.json'),
+      ).rejects.toBeInstanceOf(ConversionStorageReadError);
+    });
+  });
+
+  describe('strict removal', () => {
+    it('is idempotent for an already missing path', async () => {
+      await expect(service.remove('user-1/missing.json')).resolves.toBe(
+        'missing',
+      );
+    });
+
+    it('rejects traversal rather than deleting outside the root', async () => {
+      await expect(service.remove('../outside')).rejects.toBeInstanceOf(
+        ConversionStorageReadError,
+      );
+    });
+
+    it('surfaces unexpected unlink failures', async () => {
+      await service.save('user-1', 'a', 'json', Buffer.from('{}'));
+
+      await expect(service.remove('user-1')).rejects.toBeInstanceOf(
+        ConversionStorageError,
+      );
     });
   });
 

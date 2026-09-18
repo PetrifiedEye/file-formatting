@@ -1,5 +1,7 @@
 import { Repository } from 'typeorm';
 
+import { TransformationRetentionPolicyService } from '@/modules/transformation-result-storage/transformation-retention-policy.service';
+
 import { ConversionErrorCode } from './conversion.constants';
 import {
   ConversionErrorCategory,
@@ -39,6 +41,7 @@ function attemptFor(
 
 describe('ConversionHistoryService', () => {
   let insert: jest.Mock;
+  let calculateExpiresAt: jest.Mock;
   let service: ConversionHistoryService;
 
   const written = (): Partial<ConversionRecord> =>
@@ -46,9 +49,17 @@ describe('ConversionHistoryService', () => {
 
   beforeEach(() => {
     insert = jest.fn().mockResolvedValue({ identifiers: [{ id: 'record-1' }] });
-    service = new ConversionHistoryService({
-      insert,
-    } as unknown as Repository<ConversionRecord>);
+    calculateExpiresAt = jest
+      .fn()
+      .mockImplementation((createdAt: Date) =>
+        Promise.resolve(new Date(createdAt.getTime() + 90 * 86400000)),
+      );
+    service = new ConversionHistoryService(
+      { insert } as unknown as Repository<ConversionRecord>,
+      {
+        calculateExpiresAt,
+      } as unknown as TransformationRetentionPolicyService,
+    );
   });
 
   describe('a successful attempt', () => {
@@ -71,7 +82,13 @@ describe('ConversionHistoryService', () => {
         storedFileId: null,
         startedAt,
         durationMs: 12,
+        createdAt: expect.any(Date) as Date,
+        expiresAt: expect.any(Date) as Date,
       });
+      const row = written();
+      expect(row.expiresAt?.getTime()).toBe(
+        row.createdAt!.getTime() + 90 * 86400000,
+      );
     });
 
     it('writes an explicit column list, never a whole entity', async () => {
@@ -81,7 +98,9 @@ describe('ConversionHistoryService', () => {
       expect(Object.keys(written()).sort()).toEqual(
         [
           'durationMs',
+          'createdAt',
           'errorCategory',
+          'expiresAt',
           'failureReason',
           'inputSizeBytes',
           'originalFileName',
@@ -97,6 +116,24 @@ describe('ConversionHistoryService', () => {
           'userId',
         ].sort(),
       );
+    });
+
+    it('snapshots the active expiry for each inserted row', async () => {
+      const firstExpiry = new Date('2026-12-17T10:00:00.000Z');
+      const secondExpiry = new Date('2027-09-18T10:00:00.000Z');
+      calculateExpiresAt
+        .mockResolvedValueOnce(firstExpiry)
+        .mockResolvedValueOnce(secondExpiry);
+
+      await service.record(attemptFor());
+      await service.record(attemptFor());
+
+      const rows = (insert.mock.calls as Partial<ConversionRecord>[][]).map(
+        ([row]) => row,
+      );
+      expect(rows[0].expiresAt).toBe(firstExpiry);
+      expect(rows[1].expiresAt).toBe(secondExpiry);
+      expect(rows[0].expiresAt).toBe(firstExpiry);
     });
   });
 
@@ -262,6 +299,13 @@ describe('ConversionHistoryService', () => {
       insert.mockRejectedValue(new Error('deadlock detected'));
 
       await expect(service.record(attemptFor())).resolves.toBeNull();
+    });
+
+    it('does not throw when the retention policy cannot be read', async () => {
+      calculateExpiresAt.mockRejectedValue(new Error('settings unavailable'));
+
+      await expect(service.record(attemptFor())).resolves.toBeNull();
+      expect(insert).not.toHaveBeenCalled();
     });
 
     it('returns the new row id so a retained file can be attached', async () => {
