@@ -410,6 +410,7 @@ describe('ImageConversionService', () => {
       expect(harness.history.record).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: USER,
+          transformationType: 'image',
           sourceFormat: 'png',
           targetFormat: 'jpeg',
           outputSizeBytes: result.buffer.length,
@@ -457,6 +458,7 @@ describe('ImageConversionService', () => {
 
         expect(harness.history.record).toHaveBeenCalledWith(
           expect.objectContaining({
+            transformationType: 'image',
             sourceFormat,
             targetFormat,
             outputSizeBytes: null,
@@ -492,6 +494,7 @@ describe('ImageConversionService', () => {
         'startedAt',
         'storedFileId',
         'targetFormat',
+        'transformationType',
         'userId',
       ]);
 

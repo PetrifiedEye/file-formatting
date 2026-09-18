@@ -7,6 +7,7 @@ import { ConversionErrorCode } from '@/modules/conversion/conversion.constants';
 import {
   ImageFormat,
   ConversionRetentionOutcome,
+  TransformationType,
 } from '@/modules/conversion/conversion.enums';
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 import { ConversionHistoryService } from '@/modules/conversion/conversion-history.service';
@@ -183,6 +184,7 @@ export class ImageConversionService {
       // already correct if the link never does.
       const recordId = await this.history.record({
         userId,
+        transformationType: TransformationType.IMAGE,
         originalFileName: state.originalFileName,
         sourceFormat: state.sourceFormat,
         targetFormat: state.targetFormat,

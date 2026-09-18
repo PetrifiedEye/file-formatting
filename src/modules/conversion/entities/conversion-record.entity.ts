@@ -16,6 +16,7 @@ import {
   ConversionOutcome,
   ConversionRetentionOutcome,
   RecordedFormat,
+  TransformationType,
 } from '../conversion.enums';
 import { ConversionStoredFile } from './conversion-stored-file.entity';
 
@@ -33,6 +34,10 @@ import { ConversionStoredFile } from './conversion-stored-file.entity';
 @Index('idx_conversion_records_user_started', ['userId', 'startedAt'])
 // Operational queries: failure rates and recent failures.
 @Index('idx_conversion_records_outcome_started', ['outcome', 'startedAt'])
+// The transformation-history read path (feature 012): one user's rows, newest
+// first. Distinct from `idx_conversion_records_user_started` — history pages on
+// `created_at`, the row's write time, not on when the attempt began.
+@Index('idx_conversion_records_user_created', ['userId', 'createdAt'])
 export class ConversionRecord {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -48,6 +53,19 @@ export class ConversionRecord {
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user!: User;
+
+  /**
+   * Which conversion family wrote this row. Supplied by the writer, never
+   * inferred from the format columns — both are null when an attempt fails
+   * before detection, which happens in either family.
+   */
+  @Column({
+    name: 'transformation_type',
+    type: 'enum',
+    enum: TransformationType,
+    enumName: 'transformation_type',
+  })
+  transformationType!: TransformationType;
 
   @Column({ name: 'original_file_name', type: 'varchar', length: 255 })
   originalFileName!: string;

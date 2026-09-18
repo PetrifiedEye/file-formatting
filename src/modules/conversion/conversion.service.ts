@@ -4,6 +4,7 @@ import { ConversionErrorCode } from './conversion.constants';
 import {
   ConversionFormat,
   ConversionRetentionOutcome,
+  TransformationType,
 } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
 import { ConversionHistoryService } from './conversion-history.service';
@@ -155,6 +156,7 @@ export class ConversionService {
       // exists, and already correct if the link never does.
       const recordId = await this.history.record({
         userId,
+        transformationType: TransformationType.FILE,
         originalFileName: state.originalFileName,
         sourceFormat: state.sourceFormat,
         targetFormat: state.targetFormat,

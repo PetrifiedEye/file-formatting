@@ -7,6 +7,7 @@ import {
   ConversionOutcome,
   ConversionRetentionOutcome,
   RecordedFormat,
+  TransformationType,
 } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
 import { ConversionRecord } from './entities/conversion-record.entity';
@@ -14,6 +15,11 @@ import { ConversionRecord } from './entities/conversion-record.entity';
 /** Everything known about an attempt by the time it is recorded. */
 export interface ConversionAttempt {
   userId: string;
+  /**
+   * Required, not optional and not defaulted: each caller knows its own family
+   * unconditionally, and a default here would silently mislabel the other one.
+   */
+  transformationType: TransformationType;
   originalFileName: string;
   sourceFormat: RecordedFormat | null;
   targetFormat: RecordedFormat | null;
@@ -73,6 +79,7 @@ export class ConversionHistoryService {
 
     return {
       userId: attempt.userId,
+      transformationType: attempt.transformationType,
       // A name, truncated to the column; never content.
       originalFileName: attempt.originalFileName.slice(0, FILE_NAME_MAX_LENGTH),
       sourceFormat: attempt.sourceFormat,

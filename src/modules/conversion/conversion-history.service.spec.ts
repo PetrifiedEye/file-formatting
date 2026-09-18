@@ -6,6 +6,7 @@ import {
   ConversionFormat,
   ConversionOutcome,
   ConversionRetentionOutcome,
+  TransformationType,
 } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
 import {
@@ -21,6 +22,7 @@ function attemptFor(
 ): ConversionAttempt {
   return {
     userId: 'user-1',
+    transformationType: TransformationType.FILE,
     originalFileName: 'sample.csv',
     sourceFormat: ConversionFormat.CSV,
     targetFormat: ConversionFormat.JSON,
@@ -55,6 +57,7 @@ describe('ConversionHistoryService', () => {
 
       expect(written()).toEqual({
         userId: 'user-1',
+        transformationType: TransformationType.FILE,
         originalFileName: 'sample.csv',
         sourceFormat: ConversionFormat.CSV,
         targetFormat: ConversionFormat.JSON,
@@ -90,6 +93,7 @@ describe('ConversionHistoryService', () => {
           'startedAt',
           'storedFileId',
           'targetFormat',
+          'transformationType',
           'userId',
         ].sort(),
       );
