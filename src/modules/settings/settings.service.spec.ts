@@ -29,6 +29,7 @@ describe('SettingsService', () => {
     passwordRequireUppercase: false,
     passwordRequireDigit: false,
     passwordRequireSpecial: false,
+    transformationHistoryRetentionDays: 90,
     updatedAt: new Date(),
   };
 
@@ -50,6 +51,82 @@ describe('SettingsService', () => {
   it('returns singleton settings', async () => {
     const settings = await service.getSettings();
     expect(settings.id).toBe(1);
+  });
+
+  it('returns the active transformation retention policy', async () => {
+    await expect(service.getTransformationRetentionPolicy()).resolves.toEqual({
+      retentionDays: 90,
+    });
+    expect(repository.findOne).toHaveBeenCalledWith({ where: { id: 1 } });
+  });
+
+  it('updates and audits the transformation retention policy', async () => {
+    await expect(
+      service.updateTransformationRetentionPolicy(
+        { retentionDays: 180 },
+        { actorUserId: 'admin-1', ipAddress: '10.0.0.9', userAgent: 'jest' },
+      ),
+    ).resolves.toEqual({ retentionDays: 180 });
+
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ transformationHistoryRetentionDays: 180 }),
+    );
+    expect(settingsAuditService.record).toHaveBeenCalledWith(
+      SettingsAuditEventType.TRANSFORMATION_RETENTION_UPDATED,
+      SettingsAuditOutcome.SUCCESS,
+      {
+        actorUserId: 'admin-1',
+        ipAddress: '10.0.0.9',
+        userAgent: 'jest',
+        changes: {
+          retentionDays: { from: 90, to: 180 },
+        },
+      },
+    );
+  });
+
+  it('persists and audits an idempotent retention policy update', async () => {
+    await expect(
+      service.updateTransformationRetentionPolicy(
+        { retentionDays: 90 },
+        { actorUserId: 'admin-1' },
+      ),
+    ).resolves.toEqual({ retentionDays: 90 });
+
+    expect(repository.save).toHaveBeenCalledTimes(1);
+    expect(settingsAuditService.record).toHaveBeenCalledWith(
+      SettingsAuditEventType.TRANSFORMATION_RETENTION_UPDATED,
+      SettingsAuditOutcome.SUCCESS,
+      expect.objectContaining({ changes: {} }),
+    );
+  });
+
+  it('audits a retention persistence failure and rethrows it', async () => {
+    repository.save.mockRejectedValueOnce(new Error('retention write failed'));
+
+    await expect(
+      service.updateTransformationRetentionPolicy(
+        { retentionDays: 180 },
+        { actorUserId: 'admin-1' },
+      ),
+    ).rejects.toThrow('retention write failed');
+
+    expect(settingsAuditService.record).toHaveBeenCalledWith(
+      SettingsAuditEventType.TRANSFORMATION_RETENTION_UPDATED,
+      SettingsAuditOutcome.FAILURE,
+      expect.objectContaining({
+        changes: { retentionDays: { from: 90, to: 180 } },
+        reason: 'retention write failed',
+      }),
+    );
+  });
+
+  it('does not fail a persisted retention update when auditing fails', async () => {
+    settingsAuditService.record.mockRejectedValueOnce(new Error('audit down'));
+
+    await expect(
+      service.updateTransformationRetentionPolicy({ retentionDays: 180 }),
+    ).resolves.toEqual({ retentionDays: 180 });
   });
 
   it('updates independent confirmation flags', async () => {

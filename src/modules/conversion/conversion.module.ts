@@ -6,6 +6,7 @@ import { ConfigService } from '@/core/config/config.service';
 import { StorageModule } from '@/core/storage/storage.module';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { UserRole } from '@/modules/rbac/entities/user-role.entity';
+import { TransformationResultStorageModule } from '@/modules/transformation-result-storage/transformation-result-storage.module';
 import { User } from '@/modules/users/entities/user.entity';
 
 import { ConversionController } from './conversion.controller';
@@ -29,6 +30,7 @@ import { YamlHandler } from './formats/yaml.handler';
     ConfigModule,
     StorageModule,
     AuthModule,
+    TransformationResultStorageModule,
     TypeOrmModule.forFeature([
       ConversionRecord,
       ConversionStoredFile,

@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { TransformationRetentionPolicyService } from '@/modules/transformation-result-storage/transformation-retention-policy.service';
+
 import {
   ConversionErrorCategory,
   ConversionOutcome,
@@ -52,6 +54,7 @@ export class ConversionHistoryService {
   constructor(
     @InjectRepository(ConversionRecord)
     private readonly records: Repository<ConversionRecord>,
+    private readonly retentionPolicy: TransformationRetentionPolicyService,
   ) {}
 
   /**
@@ -64,7 +67,14 @@ export class ConversionHistoryService {
    */
   async record(attempt: ConversionAttempt): Promise<string | null> {
     try {
-      const inserted = await this.records.insert(this.toRow(attempt));
+      const createdAt = new Date();
+      const expiresAt =
+        await this.retentionPolicy.calculateExpiresAt(createdAt);
+      const inserted = await this.records.insert({
+        ...this.toRow(attempt),
+        createdAt,
+        expiresAt,
+      });
 
       return (inserted.identifiers[0]?.id as string | undefined) ?? null;
     } catch (error) {

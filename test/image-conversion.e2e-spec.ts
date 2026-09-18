@@ -30,6 +30,11 @@ import { ConversionRetentionService } from '../src/modules/conversion/conversion
 import { ConversionStoredFile } from '../src/modules/conversion/entities/conversion-stored-file.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
+import { TransformationResultAuditEvent } from '../src/modules/transformation-result-storage/entities/transformation-result-audit-event.entity';
+import {
+  TransformationResultAuditAction,
+  TransformationResultAuditOutcome,
+} from '../src/modules/transformation-result-storage/transformation-result.enums';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 const FIXTURES = join(__dirname, 'support', 'image-fixtures');
@@ -90,6 +95,7 @@ describe('Image Conversion (e2e)', () => {
   let userRepository: Repository<User>;
   let recordRepository: Repository<ConversionRecord>;
   let storedFileRepository: Repository<ConversionStoredFile>;
+  let resultAuditRepository: Repository<TransformationResultAuditEvent>;
   let retentionService: ConversionRetentionService;
   let configService: ConfigService;
   let throttlerStorage: ThrottlerStorageService;
@@ -187,6 +193,9 @@ describe('Image Conversion (e2e)', () => {
     storedFileRepository = moduleFixture.get(
       getRepositoryToken(ConversionStoredFile),
     );
+    resultAuditRepository = moduleFixture.get(
+      getRepositoryToken(TransformationResultAuditEvent),
+    );
     retentionService = moduleFixture.get(ConversionRetentionService);
     throttlerStorage = moduleFixture.get<ThrottlerStorage>(
       ThrottlerStorage,
@@ -234,6 +243,7 @@ describe('Image Conversion (e2e)', () => {
       );
     }
 
+    await resultAuditRepository.delete({ actorUserId: userId });
     await storedFileRepository.delete({ userId });
     await recordRepository.delete({ userId });
     await userRepository.delete({ email: userEmail });
@@ -833,6 +843,15 @@ describe('Image Conversion (e2e)', () => {
 
       expect(record?.retentionOutcome).toBe('stored');
       expect(record?.storedFileId).not.toBeNull();
+      expect(record!.expiresAt.getTime()).toBeGreaterThan(
+        record!.createdAt.getTime(),
+      );
+      const retentionDays = Math.round(
+        (record!.expiresAt.getTime() - record!.createdAt.getTime()) /
+          (24 * 60 * 60 * 1000),
+      );
+      expect(retentionDays).toBeGreaterThanOrEqual(1);
+      expect(retentionDays).toBeLessThanOrEqual(3650);
 
       const stored = await storedFileRepository.findOne({
         where: { id: record!.storedFileId! },
@@ -840,6 +859,19 @@ describe('Image Conversion (e2e)', () => {
 
       expect(stored?.format).toBe('jpeg');
       expect(stored?.sizeBytes).toBe((response.body as Buffer).length);
+
+      const events = await resultAuditRepository.find({
+        where: { conversionRecordId: record!.id },
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        actorUserId: userId,
+        storedFileId: stored!.id,
+        action: TransformationResultAuditAction.SAVE,
+        outcome: TransformationResultAuditOutcome.SUCCESS,
+        fileSizeBytes: (response.body as Buffer).length,
+      });
+      expect(JSON.stringify(events[0])).not.toContain(stored!.storagePath);
     });
 
     /**
@@ -899,7 +931,15 @@ describe('Image Conversion (e2e)', () => {
         const metadata = await sharp(response.body as Buffer).metadata();
 
         expect(metadata.format).toBe('jpeg');
-        expect((await latestRecord())?.retentionOutcome).toBe('failed');
+        const record = await latestRecord();
+        expect(record?.retentionOutcome).toBe('failed');
+        const [event] = await resultAuditRepository.find({
+          where: { conversionRecordId: record!.id },
+        });
+        expect(event).toMatchObject({
+          action: TransformationResultAuditAction.SAVE,
+          outcome: TransformationResultAuditOutcome.STORAGE_FAILED,
+        });
       } finally {
         store.mockRestore();
       }
@@ -923,7 +963,15 @@ describe('Image Conversion (e2e)', () => {
       const after = await readdir(join(storageRoot, userId)).catch(() => []);
 
       expect(after).toEqual(before);
-      expect((await latestRecord())?.retentionOutcome).toBe('failed');
+      const record = await latestRecord();
+      expect(record?.retentionOutcome).toBe('failed');
+      const [event] = await resultAuditRepository.find({
+        where: { conversionRecordId: record!.id },
+      });
+      expect(event).toMatchObject({
+        action: TransformationResultAuditAction.SAVE,
+        outcome: TransformationResultAuditOutcome.CONVERSION_FAILED,
+      });
     });
 
     it('produces identical bytes whether or not the result is kept', async () => {

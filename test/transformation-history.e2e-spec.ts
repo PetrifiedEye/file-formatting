@@ -249,6 +249,7 @@ describe('Transformation History (e2e)', () => {
             startedAt: createdAt,
             durationMs: spec.durationMs ?? 42,
             createdAt,
+            expiresAt: new Date(createdAt.getTime() + 90 * 24 * 60 * 60 * 1000),
           }),
         ),
       );

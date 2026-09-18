@@ -22,12 +22,20 @@ import {
 
 import { AppModule } from '../src/core/app/app.module';
 import { ConfigService } from '../src/core/config/config.service';
-import { ConversionFileStorageService } from '../src/core/storage/conversion-file-storage.service';
+import {
+  ConversionStorageError,
+  ConversionFileStorageService,
+} from '../src/core/storage/conversion-file-storage.service';
 import { ConversionRecord } from '../src/modules/conversion/entities/conversion-record.entity';
 import { ConversionRetentionService } from '../src/modules/conversion/conversion-retention.service';
 import { ConversionStoredFile } from '../src/modules/conversion/entities/conversion-stored-file.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
+import { TransformationResultAuditEvent } from '../src/modules/transformation-result-storage/entities/transformation-result-audit-event.entity';
+import {
+  TransformationResultAuditAction,
+  TransformationResultAuditOutcome,
+} from '../src/modules/transformation-result-storage/transformation-result.enums';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 const FIXTURES = join(__dirname, 'support', 'conversion-fixtures');
@@ -68,6 +76,7 @@ describe('File Format Conversion (e2e)', () => {
   let userRepository: Repository<User>;
   let recordRepository: Repository<ConversionRecord>;
   let storedFileRepository: Repository<ConversionStoredFile>;
+  let resultAuditRepository: Repository<TransformationResultAuditEvent>;
   let retentionService: ConversionRetentionService;
   let storageService: ConversionFileStorageService;
   let userId: string;
@@ -150,6 +159,9 @@ describe('File Format Conversion (e2e)', () => {
     storedFileRepository = moduleFixture.get(
       getRepositoryToken(ConversionStoredFile),
     );
+    resultAuditRepository = moduleFixture.get(
+      getRepositoryToken(TransformationResultAuditEvent),
+    );
     retentionService = moduleFixture.get(ConversionRetentionService);
     storageService = moduleFixture.get(ConversionFileStorageService);
     throttlerStorage = moduleFixture.get<ThrottlerStorage>(
@@ -184,6 +196,7 @@ describe('File Format Conversion (e2e)', () => {
   });
 
   afterAll(async () => {
+    await resultAuditRepository.delete({ actorUserId: userId });
     await storedFileRepository.delete({ userId });
     await recordRepository.delete({ userId });
     await userRepository.delete({ email: userEmail });
@@ -600,6 +613,7 @@ describe('File Format Conversion (e2e)', () => {
 
   describe('optional retention (FR-025 – FR-028)', () => {
     beforeEach(async () => {
+      await resultAuditRepository.delete({ actorUserId: userId });
       await recordRepository.delete({ userId });
     });
 
@@ -636,11 +650,34 @@ describe('File Format Conversion (e2e)', () => {
         retentionOutcome: 'stored',
         storedFileId: files[0].id,
       });
+      expect(rows[0].expiresAt.getTime()).toBeGreaterThan(
+        rows[0].createdAt.getTime(),
+      );
+      const retentionDays = Math.round(
+        (rows[0].expiresAt.getTime() - rows[0].createdAt.getTime()) /
+          (24 * 60 * 60 * 1000),
+      );
+      expect(retentionDays).toBeGreaterThanOrEqual(1);
+      expect(retentionDays).toBeLessThanOrEqual(3650);
 
       // The bytes on disk are the bytes the caller received.
       await expect(
         readFile(join(storageService.root(), files[0].storagePath), 'utf8'),
       ).resolves.toBe(response.text);
+
+      const events = await resultAuditRepository.find({
+        where: { conversionRecordId: rows[0].id },
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        actorUserId: userId,
+        storedFileId: files[0].id,
+        action: TransformationResultAuditAction.SAVE,
+        outcome: TransformationResultAuditOutcome.SUCCESS,
+        fileSizeBytes: Buffer.byteLength(response.text),
+      });
+      expect(JSON.stringify(events[0])).not.toContain(files[0].storagePath);
+      expect(JSON.stringify(events[0])).not.toContain('Ann');
     });
 
     it('stores nothing when store is absent, with byte-identical output', async () => {
@@ -696,12 +733,21 @@ describe('File Format Conversion (e2e)', () => {
         retentionOutcome: 'failed',
         storedFileId: null,
       });
+      const [event] = await resultAuditRepository.find({
+        where: { conversionRecordId: rows[0].id },
+      });
+      expect(event).toMatchObject({
+        action: TransformationResultAuditAction.SAVE,
+        outcome: TransformationResultAuditOutcome.CONVERSION_FAILED,
+      });
     });
 
     it('still returns 200 with the file when storing fails (FR-028)', async () => {
       const store = jest
-        .spyOn(retentionService, 'store')
-        .mockResolvedValue(null);
+        .spyOn(storageService, 'save')
+        .mockRejectedValue(
+          new ConversionStorageError(new Error('simulated unwritable storage')),
+        );
 
       try {
         const response = await convert(
@@ -725,8 +771,57 @@ describe('File Format Conversion (e2e)', () => {
           retentionOutcome: 'failed',
           storedFileId: null,
         });
+        const [event] = await resultAuditRepository.find({
+          where: { conversionRecordId: rows[0].id },
+        });
+        expect(event).toMatchObject({
+          action: TransformationResultAuditAction.SAVE,
+          outcome: TransformationResultAuditOutcome.STORAGE_FAILED,
+        });
       } finally {
         store.mockRestore();
+      }
+    });
+
+    it('compensates an attach failure without changing the conversion response', async () => {
+      const attach = jest
+        .spyOn(retentionService, 'attach')
+        .mockRejectedValue(new Error('simulated attach failure'));
+
+      try {
+        const response = await convert(
+          fixture('sample.csv'),
+          'sample.csv',
+          'json',
+          cookie,
+          'true',
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.headers['x-conversion-retention']).toBe('failed');
+        expect(JSON.parse(response.text)).toHaveLength(2);
+        await expect(storedFilesFor()).resolves.toHaveLength(0);
+
+        const [row] = await recordRepository.find({ where: { userId } });
+        expect(row).toMatchObject({
+          outcome: 'success',
+          retentionOutcome: 'failed',
+          storedFileId: null,
+        });
+        const [event] = await resultAuditRepository.find({
+          where: { conversionRecordId: row.id },
+        });
+        expect(event).toMatchObject({
+          action: TransformationResultAuditAction.SAVE,
+          outcome: TransformationResultAuditOutcome.ATTACH_FAILED,
+        });
+        await expect(
+          readFile(
+            join(storageService.root(), userId, `${event.storedFileId}.json`),
+          ),
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        attach.mockRestore();
       }
     });
 

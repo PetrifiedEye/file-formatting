@@ -508,11 +508,12 @@ describe('ImageConversionService', () => {
 
       harness.history.record.mockRejectedValue(new Error('database is down'));
 
-      // `ConversionHistoryService.record` swallows its own failures; this
-      // asserts the pipeline does not depend on that being true.
-      await expect(
-        convert(harness, request('solid.png', 'jpeg')),
-      ).rejects.toThrow('database is down');
+      const result = await convert(harness, request('solid.png', 'jpeg'));
+
+      expect(result.buffer.length).toBeGreaterThan(0);
+      expect(harness.retention.finalize).toHaveBeenCalledWith(
+        expect.objectContaining({ conversionRecordId: null }),
+      );
     });
 
     /**
@@ -588,23 +589,28 @@ describe('ImageConversionService', () => {
   });
 
   describe('retention', () => {
-    it('stores nothing when it was not asked for', async () => {
+    it('finalizes as not requested without invoking compatibility storage methods', async () => {
       const harness = buildService();
       const result = await convert(harness, request('solid.png', 'jpeg'));
 
       expect(harness.retention.store).not.toHaveBeenCalled();
+      expect(harness.retention.finalize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversionRecordId: 'record-1',
+          retentionRequested: false,
+          maxSizeBytes: harness.limits.maxOutputBytes,
+        }),
+      );
       expect(result.retentionOutcome).toBe('not_requested');
     });
 
-    it('stores and links the result when asked', async () => {
+    it('uses the shared history-first finalizer when asked', async () => {
       const harness = buildService();
 
-      harness.retention.store.mockResolvedValue({
-        id: 'file-1',
-        userId: USER,
-        format: 'jpeg',
-        sizeBytes: 10,
-        storagePath: `${USER}/file-1.jpg`,
+      harness.retention.finalize.mockResolvedValue({
+        retentionOutcome: 'stored',
+        storedFileId: 'file-1',
+        auditOutcome: 'success',
       });
 
       const result = await convert(
@@ -614,20 +620,22 @@ describe('ImageConversionService', () => {
         }),
       );
 
-      expect(harness.retention.store).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(harness.history.record).toHaveBeenCalledTimes(1);
+      expect(harness.retention.finalize).toHaveBeenCalledWith({
+        userId: USER,
+        conversionRecordId: 'record-1',
+        retentionRequested: true,
+        result: {
           userId: USER,
           format: 'jpeg',
           extension: 'jpg',
-        }),
-      );
-      expect(harness.retention.attach).toHaveBeenCalledWith('record-1', {
-        id: 'file-1',
-        userId: USER,
-        format: 'jpeg',
-        sizeBytes: 10,
-        storagePath: `${USER}/file-1.jpg`,
+          buffer: result.buffer,
+        },
+        maxSizeBytes: harness.limits.maxOutputBytes,
       });
+      expect(harness.history.record.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.retention.finalize.mock.invocationCallOrder[0],
+      );
       expect(result.retentionOutcome).toBe('stored');
     });
 
@@ -635,7 +643,11 @@ describe('ImageConversionService', () => {
     it('reports a storage failure without failing the conversion', async () => {
       const harness = buildService();
 
-      harness.retention.store.mockResolvedValue(null);
+      harness.retention.finalize.mockResolvedValue({
+        retentionOutcome: 'failed',
+        storedFileId: null,
+        auditOutcome: 'storage_failed',
+      });
 
       const result = await convert(
         harness,
@@ -648,18 +660,9 @@ describe('ImageConversionService', () => {
       expect(result.retentionOutcome).toBe('failed');
     });
 
-    it('discards a file it could not link', async () => {
+    it('preserves the conversion when finalization unexpectedly rejects', async () => {
       const harness = buildService();
-      const stored = {
-        id: 'file-1',
-        userId: USER,
-        format: 'jpeg',
-        sizeBytes: 10,
-        storagePath: `${USER}/file-1.jpg`,
-      };
-
-      harness.retention.store.mockResolvedValue(stored);
-      harness.retention.attach.mockRejectedValue(new Error('constraint'));
+      harness.retention.finalize.mockRejectedValue(new Error('audit offline'));
 
       const result = await convert(
         harness,
@@ -668,12 +671,12 @@ describe('ImageConversionService', () => {
         }),
       );
 
-      expect(harness.retention.discard).toHaveBeenCalledWith(stored);
+      expect(result.buffer.length).toBeGreaterThan(0);
       expect(result.retentionOutcome).toBe('failed');
     });
 
     /** FR-029: nothing is kept for an attempt that did not succeed. */
-    it('stores nothing for a failed conversion', async () => {
+    it('finalizes a requested save for a failed conversion without a result', async () => {
       const harness = buildService();
 
       await refusalOf(
@@ -684,6 +687,13 @@ describe('ImageConversionService', () => {
       );
 
       expect(harness.retention.store).not.toHaveBeenCalled();
+      expect(harness.retention.finalize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversionRecordId: 'record-1',
+          retentionRequested: true,
+          result: null,
+        }),
+      );
       expect(harness.history.record).toHaveBeenCalledWith(
         expect.objectContaining({
           retentionRequested: true,

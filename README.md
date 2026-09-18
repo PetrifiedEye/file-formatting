@@ -79,23 +79,23 @@ E2E tests run against a separate, isolated database (not your dev database), so 
 
 ## Libraries
 
-| Purpose       | Library                  |
-|---------------|--------------------------|
-| HTTP          | Fastify (`@nestjs/platform-fastify`) |
-| Validation    | Joi                      |
-| ORM           | TypeORM (`@nestjs/typeorm`) |
-| Database      | PostgreSQL (`pg`)        |
-| CSV           | `csv-parse` / `csv-stringify` |
-| XML           | `fast-xml-parser`        |
-| YAML          | `yaml` (v2, YAML 1.2)    |
+| Purpose    | Library                              |
+| ---------- | ------------------------------------ |
+| HTTP       | Fastify (`@nestjs/platform-fastify`) |
+| Validation | Joi                                  |
+| ORM        | TypeORM (`@nestjs/typeorm`)          |
+| Database   | PostgreSQL (`pg`)                    |
+| CSV        | `csv-parse` / `csv-stringify`        |
+| XML        | `fast-xml-parser`                    |
+| YAML       | `yaml` (v2, YAML 1.2)                |
 
 ## Core Modules
 
 | Purpose       | Module           |
-|---------------|-----------------|
-| Configuration | `ConfigModule`  |
+| ------------- | ---------------- |
+| Configuration | `ConfigModule`   |
 | Database      | `DatabaseModule` |
-| Health Check  | `HealthModule`  |
+| Health Check  | `HealthModule`   |
 
 ## File Format Conversion
 
@@ -115,22 +115,30 @@ along with a worked example of adding a fifth format.
 
 All optional; the defaults below ship in [`.env.example`](.env.example).
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `CONVERSION_MAX_BYTES_CSV` | `5242880` | Max accepted CSV input |
-| `CONVERSION_MAX_BYTES_JSON` | `5242880` | Max accepted JSON input |
-| `CONVERSION_MAX_BYTES_XML` | `5242880` | Max accepted XML input |
-| `CONVERSION_MAX_BYTES_YAML` | `5242880` | Max accepted YAML input |
-| `CONVERSION_MAX_OUTPUT_BYTES` | `20971520` | Ceiling on the produced document |
-| `CONVERSION_MAX_DEPTH` | `64` | Max structural nesting depth |
-| `CONVERSION_MAX_NODES` | `200000` | Max nodes in the parsed document |
-| `CONVERSION_MAX_CSV_COLUMNS` | `1024` | Max columns a CSV output may have |
-| `CONVERSION_TIMEOUT_MS` | `10000` | Per-conversion time budget |
-| `CONVERSION_MAX_CONCURRENT` | `4` | Conversions in flight (bounds memory) |
-| `CONVERSION_STORAGE_DIR` | `./storage/conversions` | Retained-result root |
+| Variable                                       | Default                 | Meaning                                                         |
+| ---------------------------------------------- | ----------------------- | --------------------------------------------------------------- |
+| `CONVERSION_MAX_BYTES_CSV`                     | `5242880`               | Max accepted CSV input                                          |
+| `CONVERSION_MAX_BYTES_JSON`                    | `5242880`               | Max accepted JSON input                                         |
+| `CONVERSION_MAX_BYTES_XML`                     | `5242880`               | Max accepted XML input                                          |
+| `CONVERSION_MAX_BYTES_YAML`                    | `5242880`               | Max accepted YAML input                                         |
+| `CONVERSION_MAX_OUTPUT_BYTES`                  | `20971520`              | Ceiling on the produced document                                |
+| `CONVERSION_MAX_DEPTH`                         | `64`                    | Max structural nesting depth                                    |
+| `CONVERSION_MAX_NODES`                         | `200000`                | Max nodes in the parsed document                                |
+| `CONVERSION_MAX_CSV_COLUMNS`                   | `1024`                  | Max columns a CSV output may have                               |
+| `CONVERSION_TIMEOUT_MS`                        | `10000`                 | Per-conversion time budget                                      |
+| `CONVERSION_MAX_CONCURRENT`                    | `4`                     | Conversions in flight (bounds memory)                           |
+| `CONVERSION_STORAGE_DIR`                       | `./storage/conversions` | Retained-result root                                            |
+| `TRANSFORMATION_RETENTION_CLEANUP_INTERVAL_MS` | `3600000`               | Expired-result cleanup interval; `0` disables scheduled cleanup |
 
 The input limit is **per source format**: the one applied is the detected
 format's, so the same byte count can be accepted as XML and refused as CSV.
+
+Both conversion operations accept an optional multipart `store` field. It is
+`false` when omitted and accepts only the strings `true` or `false`. A
+successful `store=true` request privately retains the exact response bytes and
+links them to that conversion-history row. The existing response remains the
+conversion itself; `X-Conversion-Retention` reports `stored` or `failed`.
+Invalid values return `400 invalid_store_flag`.
 
 ## Image Conversion
 
@@ -140,7 +148,7 @@ service accepts. Both require a session.
 
 Each format is one handler that may implement `decode`, `encode`, or both, and
 conversion is always `decode → RasterImage → encode`. The direction set is
-*decoders x encoders minus self-pairs* — which is why `png→svg` is not
+_decoders x encoders minus self-pairs_ — which is why `png→svg` is not
 forbidden but **unrepresentable**: the SVG handler implements no encoder, so
 the pair cannot be computed and discovery cannot advertise it.
 
@@ -150,7 +158,7 @@ pixel budget, and a worked example of adding WebP — are in
 with the pixel-level contract in
 [`specs/011-image-conversion/contracts/image-rasterisation-rules.md`](specs/011-image-conversion/contracts/image-rasterisation-rules.md).
 
-Image attempts are recorded in the *same* `conversion_records` history as text
+Image attempts are recorded in the _same_ `conversion_records` history as text
 conversions, and retained images share `CONVERSION_STORAGE_DIR`. The feature
 adds no table and no column.
 
@@ -158,20 +166,20 @@ adds no table and no column.
 
 All optional; the defaults below ship in [`.env.example`](.env.example).
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `IMAGE_MAX_BYTES_PNG` | `10485760` | Max accepted PNG input |
-| `IMAGE_MAX_BYTES_JPEG` | `10485760` | Max accepted JPEG input |
-| `IMAGE_MAX_BYTES_SVG` | `2097152` | Max accepted SVG input |
-| `IMAGE_MAX_OUTPUT_WIDTH` | `8192` | Max rasterised width |
-| `IMAGE_MAX_OUTPUT_HEIGHT` | `8192` | Max rasterised height |
-| `IMAGE_MAX_PIXELS` | `16000000` | Decoded pixel budget, read from the header |
-| `IMAGE_MAX_OUTPUT_BYTES` | `20971520` | Ceiling on the produced image |
-| `IMAGE_BACKGROUND_COLOR` | `#ffffff` | What alpha composites onto |
-| `IMAGE_JPEG_QUALITY` | `85` | Fixed output quality; never caller-supplied |
-| `IMAGE_CONVERSION_TIMEOUT_MS` | `30000` | Per-conversion time budget |
-| `IMAGE_MAX_CONCURRENT` | `2` | Conversions in flight (bounds memory) |
-| `IMAGE_SVG_FONT_DIR` | *(empty)* | Fonts for SVG text; empty means none |
+| Variable                      | Default    | Meaning                                     |
+| ----------------------------- | ---------- | ------------------------------------------- |
+| `IMAGE_MAX_BYTES_PNG`         | `10485760` | Max accepted PNG input                      |
+| `IMAGE_MAX_BYTES_JPEG`        | `10485760` | Max accepted JPEG input                     |
+| `IMAGE_MAX_BYTES_SVG`         | `2097152`  | Max accepted SVG input                      |
+| `IMAGE_MAX_OUTPUT_WIDTH`      | `8192`     | Max rasterised width                        |
+| `IMAGE_MAX_OUTPUT_HEIGHT`     | `8192`     | Max rasterised height                       |
+| `IMAGE_MAX_PIXELS`            | `16000000` | Decoded pixel budget, read from the header  |
+| `IMAGE_MAX_OUTPUT_BYTES`      | `20971520` | Ceiling on the produced image               |
+| `IMAGE_BACKGROUND_COLOR`      | `#ffffff`  | What alpha composites onto                  |
+| `IMAGE_JPEG_QUALITY`          | `85`       | Fixed output quality; never caller-supplied |
+| `IMAGE_CONVERSION_TIMEOUT_MS` | `30000`    | Per-conversion time budget                  |
+| `IMAGE_MAX_CONCURRENT`        | `2`        | Conversions in flight (bounds memory)       |
+| `IMAGE_SVG_FONT_DIR`          | _(empty)_  | Fonts for SVG text; empty means none        |
 
 Like the text pipeline, the input limit is **per source format**, so the same
 byte count can be accepted as PNG and refused as SVG. `IMAGE_SVG_FONT_DIR`
@@ -182,6 +190,57 @@ the same drawing converts identically on every host.
 Peak raster memory is bounded by `IMAGE_MAX_PIXELS x 4 bytes x
 IMAGE_MAX_CONCURRENT`.
 
+Image conversion uses the same optional `store` field and private storage
+lifecycle. `X-Image-Conversion-Retention` reports `not-requested`, `stored`, or
+`failed`; storing never changes the converted image bytes or status.
+
+## Retained transformation results
+
+Each transformation-history row receives an immutable expiry when it is
+created. The default policy is 90 days. Administrators holding
+`settings:manage` can read or change the policy for **new** rows:
+
+```text
+GET   /admin/settings/transformation-retention
+PATCH /admin/settings/transformation-retention
+Body: { "retentionDays": 180 }  # integer, 1–3650
+```
+
+Changing this setting does not move existing deadlines. Apply the feature
+migration before deployment with `npm run migration:run`; it backfills
+existing history rows to 90 days, adds the retention setting and
+`transformation-history:download-any` action, and creates the result-audit
+table.
+
+An authenticated owner downloads an unexpired retained result from:
+
+```text
+GET /api/transformations/history/:itemId/download
+```
+
+An administrator with `transformation-history:download-any` may download for a
+specified owner from:
+
+```text
+GET /admin/users/:userId/transformations/history/:itemId/download
+```
+
+Downloads stream the saved bytes with their trusted media type, deterministic
+filename, exact `Content-Length`, `Content-Encoding: identity`, and
+`Cache-Control: private, no-store`. Unknown, unsaved, cross-owner, expired, and
+missing-on-disk results all use the same `404 Transformation result not
+available` response. Authentication and admin permission checks run before
+resource lookup. Unexpected preflight storage failures return 500; if a read
+fails after headers are sent, the server aborts the incomplete transfer rather
+than presenting partial bytes as a valid download.
+
+Cleanup runs in bounded expiry order at
+`TRANSFORMATION_RETENTION_CLEANUP_INTERVAL_MS`. It unlinks a retained file
+before deleting its history row and linked metadata. Missing files are treated
+as already removed; other per-item failures leave that row for a later retry
+without blocking subsequent expired rows. Set the interval to `0` only when an
+external process invokes equivalent cleanup.
+
 ## The storage root is not `ASSETS_DIR`
 
 Shared by both conversion features, and the reason they share one root.
@@ -189,8 +248,10 @@ Shared by both conversion features, and the reason they share one root.
 `CONVERSION_STORAGE_DIR` must stay **outside** `ASSETS_DIR`. `@fastify/static`
 serves `ASSETS_DIR` at `/assets/` with no authentication, so a retained
 conversion or image placed there would be readable by anyone who could guess
-its path. Nothing serves retained files over HTTP; the application logs an
-error at startup if the two directories overlap.
+its path. Retained files have no direct/static route: only the authenticated
+download operations above expose their bytes, and API/audit payloads never
+expose storage paths. The application logs an error at startup if the two
+directories overlap.
 
 ## Adding a Module
 

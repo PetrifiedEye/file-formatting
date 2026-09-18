@@ -42,6 +42,13 @@ export class SystemSettings {
   @Column({ name: 'password_require_special', type: 'boolean', default: false })
   passwordRequireSpecial!: boolean;
 
+  @Column({
+    name: 'transformation_history_retention_days',
+    type: 'smallint',
+    default: 90,
+  })
+  transformationHistoryRetentionDays!: number;
+
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
 }

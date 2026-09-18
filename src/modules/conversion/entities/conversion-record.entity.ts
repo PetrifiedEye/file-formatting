@@ -38,6 +38,8 @@ import { ConversionStoredFile } from './conversion-stored-file.entity';
 // first. Distinct from `idx_conversion_records_user_started` — history pages on
 // `created_at`, the row's write time, not on when the attempt began.
 @Index('idx_conversion_records_user_created', ['userId', 'createdAt'])
+// Expiry cleanup scans the oldest frozen deadlines first.
+@Index('idx_conversion_records_expires_at', ['expiresAt'])
 export class ConversionRecord {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -157,6 +159,13 @@ export class ConversionRecord {
   /** Wall-clock, including the time a failed attempt spent failing. */
   @Column({ name: 'duration_ms', type: 'integer' })
   durationMs!: number;
+
+  /**
+   * Frozen when the row is inserted. Policy changes apply only to later rows,
+   * so application code must never update this value.
+   */
+  @Column({ name: 'expires_at', type: 'timestamptz', precision: 3 })
+  readonly expiresAt!: Date;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz', precision: 3 })
   createdAt!: Date;

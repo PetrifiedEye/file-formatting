@@ -17,6 +17,13 @@ import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 
 import { AppModule } from '../src/core/app/app.module';
 import { ConfigService } from '../src/core/config/config.service';
+import {
+  ConversionFormat,
+  ConversionRetentionOutcome,
+  TransformationType,
+} from '../src/modules/conversion/conversion.enums';
+import { ConversionHistoryService } from '../src/modules/conversion/conversion-history.service';
+import { ConversionRecord } from '../src/modules/conversion/entities/conversion-record.entity';
 import { AccessConfigService } from '../src/modules/rbac/access-config.service';
 import { Grant } from '../src/modules/rbac/entities/grant.entity';
 import { Permission } from '../src/modules/rbac/entities/permission.entity';
@@ -53,15 +60,19 @@ describe('Admin Settings authorization and audit (e2e)', () => {
   let userRoleRepository: Repository<UserRole>;
   let settingsRepository: Repository<SystemSettings>;
   let auditRepository: Repository<SettingsAuditEvent>;
+  let recordRepository: Repository<ConversionRecord>;
+  let conversionHistoryService: ConversionHistoryService;
   let accessConfigService: AccessConfigService;
   let throttlerStorage: ThrottlerStorageService;
 
   let adminUserId: string;
+  let plainUserId: string;
   let adminRoleId: string;
   let settingsPermissionId: string;
   let settingsGrantId: string;
   let adminCookie: string;
   let plainCookie: string;
+  let originalRetentionDays: number;
 
   beforeAll(async () => {
     initializeTransactionalContext({ storageDriver: StorageDriver.AUTO });
@@ -98,7 +109,12 @@ describe('Admin Settings authorization and audit (e2e)', () => {
     grantRepository = moduleFixture.get(getRepositoryToken(Grant));
     userRoleRepository = moduleFixture.get(getRepositoryToken(UserRole));
     settingsRepository = moduleFixture.get(getRepositoryToken(SystemSettings));
+    originalRetentionDays = (
+      await settingsRepository.findOneByOrFail({ id: 1 })
+    ).transformationHistoryRetentionDays;
     auditRepository = moduleFixture.get(getRepositoryToken(SettingsAuditEvent));
+    recordRepository = moduleFixture.get(getRepositoryToken(ConversionRecord));
+    conversionHistoryService = moduleFixture.get(ConversionHistoryService);
     accessConfigService = moduleFixture.get(AccessConfigService);
     throttlerStorage = moduleFixture.get<ThrottlerStorage>(
       ThrottlerStorage,
@@ -106,6 +122,9 @@ describe('Admin Settings authorization and audit (e2e)', () => {
   });
 
   afterAll(async () => {
+    await settingsRepository.update(1, {
+      transformationHistoryRetentionDays: originalRetentionDays,
+    });
     await app.close();
   });
 
@@ -125,6 +144,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
       passwordRecoveryConfirmationEnabled: false,
       signInConfirmationEnabled: false,
       passwordMinLength: 8,
+      transformationHistoryRetentionDays: 90,
     });
 
     const passwordHash = await hashPassword(TEST_PASSWORD);
@@ -148,6 +168,7 @@ describe('Admin Settings authorization and audit (e2e)', () => {
         confirmedAt: new Date(),
       }),
     );
+    plainUserId = plainUser.id;
 
     const adminRole = await roleRepository.save(
       roleRepository.create({ name: `admin-${stamp}` }),
@@ -320,6 +341,133 @@ describe('Admin Settings authorization and audit (e2e)', () => {
         .expect(403);
 
       expect(await auditRepository.count()).toBe(0);
+    });
+  });
+
+  describe('transformation retention policy', () => {
+    it('reads the current policy only for settings administrators', async () => {
+      await request(baseUrl)
+        .get('/admin/settings/transformation-retention')
+        .expect(401);
+      await request(baseUrl)
+        .get('/admin/settings/transformation-retention')
+        .set('Cookie', plainCookie)
+        .expect(403);
+
+      const response = await request(baseUrl)
+        .get('/admin/settings/transformation-retention')
+        .set('Cookie', adminCookie)
+        .expect(200);
+
+      expect(response.body).toEqual({ retentionDays: 90 });
+      expect(await auditRepository.count()).toBe(0);
+    });
+
+    it.each([
+      ['missing', {}],
+      ['zero', { retentionDays: 0 }],
+      ['above the maximum', { retentionDays: 3651 }],
+      ['fractional', { retentionDays: 1.5 }],
+      ['not numeric', { retentionDays: '90' }],
+    ])('rejects a %s retention value', async (_name, body) => {
+      await request(baseUrl)
+        .patch('/admin/settings/transformation-retention')
+        .set('Cookie', adminCookie)
+        .send(body)
+        .expect(400);
+
+      expect(
+        (await settingsRepository.findOneByOrFail({ id: 1 }))
+          .transformationHistoryRetentionDays,
+      ).toBe(90);
+      expect(await auditRepository.count()).toBe(0);
+    });
+
+    it('persists and audits a valid update, including an idempotent update', async () => {
+      await request(baseUrl)
+        .patch('/admin/settings/transformation-retention')
+        .set('Cookie', plainCookie)
+        .send({ retentionDays: 180 })
+        .expect(403);
+
+      const updated = await request(baseUrl)
+        .patch('/admin/settings/transformation-retention')
+        .set('Cookie', adminCookie)
+        .set('User-Agent', 'retention-e2e')
+        .send({ retentionDays: 180 })
+        .expect(200);
+      expect(updated.body).toEqual({ retentionDays: 180 });
+
+      await request(baseUrl)
+        .patch('/admin/settings/transformation-retention')
+        .set('Cookie', adminCookie)
+        .send({ retentionDays: 180 })
+        .expect(200);
+
+      const events = await auditRepository.find({
+        where: {
+          eventType: SettingsAuditEventType.TRANSFORMATION_RETENTION_UPDATED,
+        },
+        order: { createdAt: 'ASC' },
+      });
+      expect(events).toHaveLength(2);
+      expect(events[0]).toMatchObject({
+        actorUserId: adminUserId,
+        eventType: SettingsAuditEventType.TRANSFORMATION_RETENTION_UPDATED,
+        outcome: SettingsAuditOutcome.SUCCESS,
+        changes: { retentionDays: { from: 90, to: 180 } },
+        userAgent: 'retention-e2e',
+      });
+      expect(events[1].changes).toEqual({});
+    });
+
+    it('freezes existing deadlines and applies a changed policy only to later records', async () => {
+      const createRecord = async (): Promise<ConversionRecord> => {
+        const id = await conversionHistoryService.record({
+          userId: plainUserId,
+          transformationType: TransformationType.FILE,
+          originalFileName: 'retention.csv',
+          sourceFormat: ConversionFormat.CSV,
+          targetFormat: ConversionFormat.JSON,
+          inputSizeBytes: 10,
+          outputSizeBytes: 20,
+          retentionRequested: false,
+          retentionOutcome: ConversionRetentionOutcome.NOT_REQUESTED,
+          storedFileId: null,
+          startedAt: new Date(),
+          durationMs: 1,
+        });
+        return recordRepository.findOneByOrFail({ id: id! });
+      };
+
+      const before = await createRecord();
+      const frozenDeadline = before.expiresAt.getTime();
+
+      await request(baseUrl)
+        .patch('/admin/settings/transformation-retention')
+        .set('Cookie', adminCookie)
+        .send({ retentionDays: 180 })
+        .expect(200);
+
+      const after = await createRecord();
+      const beforeReloaded = await recordRepository.findOneByOrFail({
+        id: before.id,
+      });
+      const dayMs = 24 * 60 * 60 * 1000;
+
+      expect(beforeReloaded.expiresAt.getTime()).toBe(frozenDeadline);
+      expect(
+        Math.round(
+          (beforeReloaded.expiresAt.getTime() -
+            beforeReloaded.createdAt.getTime()) /
+            dayMs,
+        ),
+      ).toBe(90);
+      expect(
+        Math.round(
+          (after.expiresAt.getTime() - after.createdAt.getTime()) / dayMs,
+        ),
+      ).toBe(180);
     });
   });
 });

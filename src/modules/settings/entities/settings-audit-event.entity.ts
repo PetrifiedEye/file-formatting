@@ -8,6 +8,7 @@ import {
 
 export enum SettingsAuditEventType {
   CONFIRMATION_POLICY_UPDATED = 'confirmation_policy_updated',
+  TRANSFORMATION_RETENTION_UPDATED = 'transformation_retention_updated',
 }
 
 export enum SettingsAuditOutcome {

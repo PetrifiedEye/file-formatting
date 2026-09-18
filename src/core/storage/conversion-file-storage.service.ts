@@ -1,6 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { mkdir, unlink, writeFile } from 'fs/promises';
-import { join, relative, resolve, sep } from 'path';
+import { constants, type ReadStream } from 'fs';
+import {
+  type FileHandle,
+  mkdir,
+  open,
+  realpath,
+  unlink,
+  writeFile,
+} from 'fs/promises';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'path';
 
 import { ConfigService } from '@/core/config/config.service';
 
@@ -11,6 +27,26 @@ export class ConversionStorageError extends Error {
     this.name = 'ConversionStorageError';
     this.cause = cause;
   }
+}
+
+export class ConversionStorageFileMissingError extends Error {
+  constructor() {
+    super('Stored conversion file is missing');
+    this.name = 'ConversionStorageFileMissingError';
+  }
+}
+
+export class ConversionStorageReadError extends Error {
+  constructor(cause?: unknown) {
+    super('Failed to open the stored conversion file');
+    this.name = 'ConversionStorageReadError';
+    this.cause = cause;
+  }
+}
+
+export interface OpenedConversionFile {
+  stream: ReadStream;
+  size: number;
 }
 
 /**
@@ -70,12 +106,115 @@ export class ConversionFileStorageService {
 
   async delete(relativePath: string): Promise<void> {
     try {
-      await unlink(join(this.root(), relativePath));
+      await this.remove(relativePath);
     } catch (error) {
-      this.logger.warn(
-        `Failed to delete a stored conversion at ${relativePath}`,
-        error as Error,
+      this.logger.warn('Failed to delete a stored conversion', error as Error);
+    }
+  }
+
+  /**
+   * Remove one stored file. Missing files are already-clean state; every other
+   * failure is strict so lifecycle cleanup can retain the database row for a
+   * later retry.
+   */
+  async remove(relativePath: string): Promise<'removed' | 'missing'> {
+    try {
+      const path = await this.containedPath(relativePath);
+      await unlink(path);
+      return 'removed';
+    } catch (error) {
+      if (
+        error instanceof ConversionStorageFileMissingError ||
+        isErrorCode(error, 'ENOENT')
+      ) {
+        return 'missing';
+      }
+      if (error instanceof ConversionStorageReadError) {
+        throw error;
+      }
+      throw new ConversionStorageError(error);
+    }
+  }
+
+  /**
+   * Open and stat through one descriptor before any HTTP headers are written.
+   *
+   * `O_NOFOLLOW` rejects a final-component symlink. The lexical containment
+   * check also rejects absolute paths and traversal before touching storage.
+   * The returned stream owns the descriptor and closes it on end/error.
+   */
+  async openForRead(relativePath: string): Promise<OpenedConversionFile> {
+    let handle: FileHandle | undefined;
+
+    try {
+      handle = await open(
+        await this.containedPath(relativePath),
+        constants.O_RDONLY | constants.O_NOFOLLOW,
       );
+      const fileStat = await handle.stat();
+
+      if (!fileStat.isFile()) {
+        throw new ConversionStorageReadError();
+      }
+
+      return {
+        stream: handle.createReadStream({ autoClose: true }),
+        size: fileStat.size,
+      };
+    } catch (error) {
+      if (handle) {
+        await handle.close().catch(() => undefined);
+      }
+      if (
+        error instanceof ConversionStorageReadError ||
+        error instanceof ConversionStorageFileMissingError
+      ) {
+        throw error;
+      }
+      if (isErrorCode(error, 'ENOENT')) {
+        throw new ConversionStorageFileMissingError();
+      }
+      throw new ConversionStorageReadError(error);
+    }
+  }
+
+  private async containedPath(relativePath: string): Promise<string> {
+    const root = this.root();
+    const path = resolve(root, relativePath);
+    const offset = relative(root, path);
+    const contained =
+      !isAbsolute(relativePath) &&
+      offset !== '' &&
+      !offset.startsWith('..') &&
+      !isAbsolute(offset) &&
+      !offset.startsWith(sep);
+
+    if (!contained) {
+      throw new ConversionStorageReadError();
+    }
+
+    try {
+      const [canonicalRoot, canonicalParent] = await Promise.all([
+        realpath(root),
+        realpath(dirname(path)),
+      ]);
+      const parentOffset = relative(canonicalRoot, canonicalParent);
+      if (
+        canonicalParent !== canonicalRoot &&
+        (parentOffset.startsWith('..') || isAbsolute(parentOffset))
+      ) {
+        throw new ConversionStorageReadError();
+      }
+
+      return join(canonicalParent, basename(path));
+    } catch (error) {
+      if (error instanceof ConversionStorageReadError) {
+        throw error;
+      }
+      if (isErrorCode(error, 'ENOENT')) {
+        throw new ConversionStorageFileMissingError();
+      }
+      throw new ConversionStorageReadError(error);
     }
   }
 
@@ -107,4 +246,13 @@ export class ConversionFileStorageService {
       );
     }
   }
+}
+
+function isErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === code
+  );
 }

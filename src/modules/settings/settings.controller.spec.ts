@@ -9,6 +9,8 @@ describe('SettingsController', () => {
   const settingsService = {
     getSettings: jest.fn(),
     updateConfirmationPolicy: jest.fn(),
+    getTransformationRetentionPolicy: jest.fn(),
+    updateTransformationRetentionPolicy: jest.fn(),
   };
 
   const adminGuard = { canActivate: jest.fn().mockReturnValue(true) };
@@ -66,6 +68,40 @@ describe('SettingsController', () => {
     // Without the actor the audit trail cannot say who changed the policy.
     expect(settingsService.updateConfirmationPolicy).toHaveBeenCalledWith(
       { registrationConfirmationEnabled: true },
+      { actorUserId: 'admin-1', ipAddress: '10.0.0.9', userAgent: 'jest' },
+    );
+  });
+
+  it('shapes the transformation retention policy response', async () => {
+    settingsService.getTransformationRetentionPolicy.mockResolvedValue({
+      retentionDays: 90,
+    });
+
+    await expect(
+      controller.getTransformationRetentionPolicy(),
+    ).resolves.toEqual({ retentionDays: 90 });
+  });
+
+  it('forwards a retention update and actor metadata', async () => {
+    settingsService.updateTransformationRetentionPolicy.mockResolvedValue({
+      retentionDays: 180,
+    });
+
+    await expect(
+      controller.updateTransformationRetentionPolicy(
+        { retentionDays: 180 },
+        {
+          user: { id: 'admin-1' },
+          ip: '10.0.0.9',
+          headers: { 'user-agent': ['jest', 'ignored'] },
+        },
+      ),
+    ).resolves.toEqual({ retentionDays: 180 });
+
+    expect(
+      settingsService.updateTransformationRetentionPolicy,
+    ).toHaveBeenCalledWith(
+      { retentionDays: 180 },
       { actorUserId: 'admin-1', ipAddress: '10.0.0.9', userAgent: 'jest' },
     );
   });

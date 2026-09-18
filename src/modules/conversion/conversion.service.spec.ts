@@ -1,6 +1,8 @@
 import { Readable } from 'stream';
 
+import { ConversionErrorCode } from './conversion.constants';
 import { ConversionFormat } from './conversion.enums';
+import { ConversionRetentionOutcome } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
 import { ConversionHistoryService } from './conversion-history.service';
 import { ConversionRetentionService } from './conversion-retention.service';
@@ -47,41 +49,41 @@ const FIXTURES: Record<ConversionFormat, string> = {
     '- name: Ann\n  age: "30"\n- name: Bob\n  age: "41"\n',
 };
 
-/** History is exercised by its own spec; here it only has to not get in the way. */
-function historyStub(): ConversionHistoryService {
-  return {
-    record: jest.fn().mockResolvedValue(undefined),
-  } as unknown as ConversionHistoryService;
-}
-
-/**
- * Retention has its own spec; here it only has to stay out of the way — and,
- * by never storing, keep every assertion about the conversion itself honest.
- */
-function retentionStub(): ConversionRetentionService {
-  return {
-    store: jest.fn().mockResolvedValue(null),
-    attach: jest.fn().mockResolvedValue(true),
-    discard: jest.fn().mockResolvedValue(undefined),
-  } as unknown as ConversionRetentionService;
-}
-
-function serviceWith(
-  overrides: Partial<ConversionLimits> = {},
-): ConversionService {
+function executionHarness(overrides: Partial<ConversionLimits> = {}) {
   const limits = { ...baseLimits, ...overrides };
   const registry = new FormatRegistryService(
     [new CsvHandler(), new JsonHandler(), new XmlHandler(), new YamlHandler()],
     limits,
   );
+  const history = {
+    record: jest.fn().mockResolvedValue('record-1'),
+  };
+  const retention = {
+    finalize: jest.fn().mockResolvedValue({
+      retentionOutcome: ConversionRetentionOutcome.NOT_REQUESTED,
+      storedFileId: null,
+      auditOutcome: null,
+    }),
+    store: jest.fn().mockResolvedValue(null),
+    attach: jest.fn().mockResolvedValue(true),
+    discard: jest.fn().mockResolvedValue(undefined),
+  };
 
-  return new ConversionService(
+  const service = new ConversionService(
     registry,
     new FormatDetectorService(registry),
-    historyStub(),
-    retentionStub(),
+    history as unknown as ConversionHistoryService,
+    retention as unknown as ConversionRetentionService,
     limits,
   );
+
+  return { service, history, retention, limits };
+}
+
+function serviceWith(
+  overrides: Partial<ConversionLimits> = {},
+): ConversionService {
+  return executionHarness(overrides).service;
 }
 
 function readerFor(body: string | Buffer): UploadReader {
@@ -450,6 +452,109 @@ describe('ConversionService', () => {
       for (const outcome of outcomes) {
         expect(outcome.status).toBe('rejected');
       }
+    });
+  });
+
+  describe('history-first retention finalization', () => {
+    const collect = (
+      retentionRequested: boolean,
+    ): Parameters<ConversionService['execute']>[1] => {
+      return (state) => {
+        state.originalFileName = 'sample.csv';
+        state.sourceFormat = ConversionFormat.CSV;
+        state.targetFormat = ConversionFormat.JSON;
+        state.inputSizeBytes = Buffer.byteLength(
+          FIXTURES[ConversionFormat.CSV],
+        );
+        state.retentionRequested = retentionRequested;
+
+        return Promise.resolve({
+          received: {
+            text: FIXTURES[ConversionFormat.CSV],
+            sourceFormat: ConversionFormat.CSV,
+            sizeBytes: state.inputSizeBytes,
+          },
+          targetFormat: ConversionFormat.JSON,
+        });
+      };
+    };
+
+    it('preserves result bytes and metadata while using the shared finalizer', async () => {
+      const harness = executionHarness();
+      harness.retention.finalize.mockResolvedValue({
+        retentionOutcome: ConversionRetentionOutcome.STORED,
+        storedFileId: 'file-1',
+        auditOutcome: 'success',
+      });
+
+      const result = await harness.service.execute('user-1', collect(true));
+
+      expect(JSON.parse(result.buffer.toString('utf8'))).toEqual([
+        { name: 'Ann', age: '30' },
+        { name: 'Bob', age: '41' },
+      ]);
+      expect(result).toMatchObject({
+        mediaType: 'application/json',
+        extension: 'json',
+        sourceFormat: ConversionFormat.CSV,
+        targetFormat: ConversionFormat.JSON,
+        retentionOutcome: ConversionRetentionOutcome.STORED,
+      });
+      expect(harness.retention.finalize).toHaveBeenCalledWith({
+        userId: 'user-1',
+        conversionRecordId: 'record-1',
+        retentionRequested: true,
+        result: {
+          userId: 'user-1',
+          format: ConversionFormat.JSON,
+          extension: 'json',
+          buffer: result.buffer,
+        },
+        maxSizeBytes: harness.limits.maxOutputBytes,
+      });
+      expect(harness.history.record.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.retention.finalize.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('finalizes a recognized save intent when conversion fails', async () => {
+      const harness = executionHarness();
+      const failure = new ConversionException(ConversionErrorCode.PARSE_ERROR);
+
+      const execution = harness.service.execute('user-1', (state) => {
+        state.retentionRequested = true;
+        return Promise.reject(failure);
+      });
+
+      await expect(execution).rejects.toBe(failure);
+      expect(harness.history.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          retentionRequested: true,
+          retentionOutcome: ConversionRetentionOutcome.FAILED,
+          failure,
+        }),
+      );
+      expect(harness.retention.finalize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversionRecordId: 'record-1',
+          retentionRequested: true,
+          result: null,
+        }),
+      );
+    });
+
+    it('does not let history or finalization failures replace a result', async () => {
+      const harness = executionHarness();
+      harness.history.record.mockRejectedValue(new Error('history offline'));
+      harness.retention.finalize.mockRejectedValue(new Error('audit offline'));
+
+      const result = await harness.service.execute('user-1', collect(true));
+
+      expect(result.buffer.length).toBeGreaterThan(0);
+      expect(result.retentionOutcome).toBe(ConversionRetentionOutcome.FAILED);
+      expect(harness.retention.finalize).toHaveBeenCalledWith(
+        expect.objectContaining({ conversionRecordId: null }),
+      );
     });
   });
 

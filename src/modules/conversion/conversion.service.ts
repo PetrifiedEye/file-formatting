@@ -8,10 +8,7 @@ import {
 } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
 import { ConversionHistoryService } from './conversion-history.service';
-import {
-  ConversionRetentionService,
-  StoredFile,
-} from './conversion-retention.service';
+import { ConversionRetentionService } from './conversion-retention.service';
 import { FormatDetectorService } from './format-detector.service';
 import { FormatRegistryService } from './format-registry.service';
 import { guardStructure } from './formats/document-node';
@@ -121,26 +118,15 @@ export class ConversionService {
     };
 
     let result: ConversionResult | undefined;
-    let stored: StoredFile | null = null;
     let failure: unknown;
 
     try {
       const collected = await collect(state);
       result = await this.convert(collected.received, collected.targetFormat);
 
-      // FR-026: nothing is kept for a conversion that did not succeed, so this
-      // only ever runs once there is a valid result.
       if (state.retentionRequested) {
-        stored = await this.retention.store({
-          userId,
-          format: result.targetFormat,
-          extension: result.extension,
-          buffer: result.buffer,
-        });
-
-        result.retentionOutcome = stored
-          ? ConversionRetentionOutcome.STORED
-          : ConversionRetentionOutcome.FAILED;
+        // Pessimistic until history-first finalization durably links the file.
+        result.retentionOutcome = ConversionRetentionOutcome.FAILED;
       }
 
       return result;
@@ -154,55 +140,64 @@ export class ConversionService {
       // erase the record of the attempt (FR-024). It claims `failed` for a
       // file that is on disk but not yet linked: pessimistic until the link
       // exists, and already correct if the link never does.
-      const recordId = await this.history.record({
-        userId,
-        transformationType: TransformationType.FILE,
-        originalFileName: state.originalFileName,
-        sourceFormat: state.sourceFormat,
-        targetFormat: state.targetFormat,
-        inputSizeBytes: state.inputSizeBytes,
-        outputSizeBytes: result ? result.buffer.length : null,
-        retentionRequested: state.retentionRequested,
-        retentionOutcome: state.retentionRequested
-          ? ConversionRetentionOutcome.FAILED
-          : ConversionRetentionOutcome.NOT_REQUESTED,
-        storedFileId: null,
-        startedAt,
-        durationMs,
-        failure,
-      });
+      let recordId: string | null = null;
 
-      if (stored && result) {
-        result.retentionOutcome = await this.attach(recordId, stored);
+      try {
+        recordId = await this.history.record({
+          userId,
+          transformationType: TransformationType.FILE,
+          originalFileName: state.originalFileName,
+          sourceFormat: state.sourceFormat,
+          targetFormat: state.targetFormat,
+          inputSizeBytes: state.inputSizeBytes,
+          outputSizeBytes: result ? result.buffer.length : null,
+          retentionRequested: state.retentionRequested,
+          retentionOutcome: state.retentionRequested
+            ? ConversionRetentionOutcome.FAILED
+            : ConversionRetentionOutcome.NOT_REQUESTED,
+          storedFileId: null,
+          startedAt,
+          durationMs,
+          failure,
+        });
+      } catch (historyError) {
+        // The service is itself best-effort; this additionally protects the
+        // primary conversion from a broken test double or future regression.
+        this.logger.error(
+          'Failed to record document conversion history',
+          historyError as Error,
+        );
+      }
+
+      try {
+        const finalized = await this.retention.finalize({
+          userId,
+          conversionRecordId: recordId,
+          retentionRequested: state.retentionRequested,
+          result: result
+            ? {
+                userId,
+                format: result.targetFormat,
+                extension: result.extension,
+                buffer: result.buffer,
+              }
+            : null,
+          maxSizeBytes: this.limits.maxOutputBytes,
+        });
+
+        if (result) {
+          result.retentionOutcome = finalized.retentionOutcome;
+        }
+      } catch (retentionError) {
+        // `finalize` is non-throwing by contract. Preserve the result even if
+        // an injected collaborator violates that contract.
+        this.logger.error(
+          'Failed to finalize document conversion retention',
+          retentionError as Error,
+        );
       }
 
       this.log(userId, state, failure, durationMs);
-    }
-  }
-
-  /**
-   * Link a stored file to its conversion record, or drop it.
-   *
-   * A storage or bookkeeping failure never becomes a conversion failure: the
-   * caller still receives a valid file, and both the response header and the
-   * history row say `failed` (FR-028).
-   */
-  private async attach(
-    recordId: string | null,
-    stored: StoredFile,
-  ): Promise<ConversionRetentionOutcome> {
-    if (recordId === null) {
-      // No record to attach to; the file would be unreachable forever.
-      await this.retention.discard(stored);
-      return ConversionRetentionOutcome.FAILED;
-    }
-
-    try {
-      await this.retention.attach(recordId, stored);
-      return ConversionRetentionOutcome.STORED;
-    } catch {
-      await this.retention.discard(stored);
-      return ConversionRetentionOutcome.FAILED;
     }
   }
 
