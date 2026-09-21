@@ -1,7 +1,20 @@
 import { Injectable } from '@nestjs/common';
+import * as React from 'react';
 
 import { ConfigService } from '@/core/config/config.service';
 import { EmailService } from '@/core/email/email.service';
+import { VerificationEmail } from '@/core/email/templates/verification-email';
+
+/** Lifetime of every one-time code and confirmation link issued below. */
+const EXPIRES_IN_MINUTES = 10;
+
+interface VerificationMail {
+  /** Path the confirmation link points at, relative to `APP_BASE_URL`. */
+  path: string;
+  subject: string;
+  intro: string;
+  actionLabel: string;
+}
 
 @Injectable()
 export class ConfirmationMailService {
@@ -15,23 +28,11 @@ export class ConfirmationMailService {
     otp: string,
     linkToken: string,
   ): Promise<void> {
-    const baseUrl = this.configService.get('APP_BASE_URL');
-    const link = `${baseUrl}/register/confirm/link?token=${linkToken}`;
-
-    const text = [
-      'Confirm your registration',
-      '',
-      `Your confirmation code: ${otp}`,
-      '',
-      `Or click this link: ${link}`,
-      '',
-      'This code and link expire in 10 minutes.',
-    ].join('\n');
-
-    await this.emailService.sendMail({
-      to,
+    await this.send(to, otp, linkToken, {
+      path: '/register/confirm/link',
       subject: 'Confirm your registration',
-      text,
+      intro: 'Use the code below to finish creating your account.',
+      actionLabel: 'Confirm registration',
     });
   }
 
@@ -40,23 +41,11 @@ export class ConfirmationMailService {
     otp: string,
     linkToken: string,
   ): Promise<void> {
-    const baseUrl = this.configService.get('APP_BASE_URL');
-    const link = `${baseUrl}/login/verify/link?token=${linkToken}`;
-
-    const text = [
-      'Finish signing in',
-      '',
-      `Your sign-in code: ${otp}`,
-      '',
-      `Or click this link: ${link}`,
-      '',
-      'This code and link expire in 10 minutes.',
-    ].join('\n');
-
-    await this.emailService.sendMail({
-      to,
+    await this.send(to, otp, linkToken, {
+      path: '/login/verify/link',
       subject: 'Finish signing in',
-      text,
+      intro: 'Use the code below to finish signing in.',
+      actionLabel: 'Finish signing in',
     });
   }
 
@@ -65,23 +54,11 @@ export class ConfirmationMailService {
     otp: string,
     linkToken: string,
   ): Promise<void> {
-    const baseUrl = this.configService.get('APP_BASE_URL');
-    const link = `${baseUrl}/reset-password?token=${linkToken}`;
-
-    const text = [
-      'Reset your password',
-      '',
-      `Your password reset code: ${otp}`,
-      '',
-      `Or click this link: ${link}`,
-      '',
-      'This code and link expire in 10 minutes.',
-    ].join('\n');
-
-    await this.emailService.sendMail({
-      to,
+    await this.send(to, otp, linkToken, {
+      path: '/reset-password',
       subject: 'Reset your password',
-      text,
+      intro: 'Use the code below to choose a new password.',
+      actionLabel: 'Reset password',
     });
   }
 
@@ -90,23 +67,11 @@ export class ConfirmationMailService {
     otp: string,
     linkToken: string,
   ): Promise<void> {
-    const baseUrl = this.configService.get('APP_BASE_URL');
-    const link = `${baseUrl}/account/email-change/confirm?token=${linkToken}`;
-
-    const text = [
-      'Confirm your new email address',
-      '',
-      `Your confirmation code: ${otp}`,
-      '',
-      `Or click this link: ${link}`,
-      '',
-      'This code and link expire in 10 minutes.',
-    ].join('\n');
-
-    await this.emailService.sendMail({
-      to,
+    await this.send(to, otp, linkToken, {
+      path: '/account/email-change/confirm',
       subject: 'Confirm your new email address',
-      text,
+      intro: 'Use the code below to confirm your new email address.',
+      actionLabel: 'Confirm email address',
     });
   }
 
@@ -115,23 +80,34 @@ export class ConfirmationMailService {
     otp: string,
     linkToken: string,
   ): Promise<void> {
-    const baseUrl = this.configService.get('APP_BASE_URL');
-    const link = `${baseUrl}/account/delete/confirm?token=${linkToken}`;
+    await this.send(to, otp, linkToken, {
+      path: '/account/delete/confirm',
+      subject: 'Confirm account deletion',
+      intro: 'Use the code below to confirm deletion of your account.',
+      actionLabel: 'Confirm deletion',
+    });
+  }
 
-    const text = [
-      'Confirm account deletion',
-      '',
-      `Your confirmation code: ${otp}`,
-      '',
-      `Or click this link: ${link}`,
-      '',
-      'This code and link expire in 10 minutes.',
-    ].join('\n');
+  private async send(
+    to: string,
+    otp: string,
+    linkToken: string,
+    mail: VerificationMail,
+  ): Promise<void> {
+    const baseUrl = this.configService.get('APP_BASE_URL');
+    const actionUrl = `${baseUrl}${mail.path}?token=${linkToken}`;
 
     await this.emailService.sendMail({
       to,
-      subject: 'Confirm account deletion',
-      text,
+      subject: mail.subject,
+      react: React.createElement(VerificationEmail, {
+        heading: mail.subject,
+        intro: mail.intro,
+        otp,
+        actionUrl,
+        actionLabel: mail.actionLabel,
+        expiresInMinutes: EXPIRES_IN_MINUTES,
+      }),
     });
   }
 }
