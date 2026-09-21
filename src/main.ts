@@ -92,6 +92,11 @@ async function bootstrap() {
     origin: cors.origins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
+    exposedHeaders: [
+      'Content-Disposition',
+      'X-Conversion-Retention',
+      'X-Image-Conversion-Retention',
+    ],
     preflightContinue: false,
     optionsSuccessStatus: 204,
   });
