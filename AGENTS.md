@@ -96,6 +96,7 @@ Use these files as reference when adding new code:
 | Module wiring | `src/modules/auth/auth.module.ts` |
 | Request DTO | `src/modules/auth/dto/register-request.dto.ts` |
 | Global config validation | `src/core/config/config.module.ts` |
+| Email template (React Email) | `src/core/email/templates/verification-email.tsx` |
 | App bootstrap (Fastify) | `src/main.ts` |
 
 ## References

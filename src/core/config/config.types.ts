@@ -55,6 +55,7 @@ export interface Config {
    */
   SMTP_HOST: string;
   SMTP_PORT: number;
+  SMTP_SECURE?: boolean;
   SMTP_USER?: string;
   SMTP_PASSWORD?: string;
   SMTP_FROM: string;

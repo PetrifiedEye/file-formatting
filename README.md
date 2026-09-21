@@ -77,6 +77,20 @@ E2E tests run against a separate, isolated database (not your dev database), so 
 3. If `.env.test` is missing, or its `POSTGRES_DB` matches dev's, the suite fails fast with a clear error instead of silently running against (and mutating) the dev database.
 4. **CI:** no `.env.test` file is needed — set `POSTGRES_HOST`, `POSTGRES_DB`, etc. as real environment variables and they take precedence over anything a file would provide.
 
+### Email templates
+
+Messages are React components under `src/core/email/templates/`, built with [React Email](https://react.email). `EmailService.sendMail()` takes the element and renders it twice: to the HTML body, and to the plain-text alternative that clients refusing HTML fall back on — no second copy of the wording to keep in sync.
+
+Preview templates in the browser while editing them:
+
+```bash
+npm run email:dev
+```
+
+The first run asks to install `@react-email/ui` (~50 MB, the preview UI only) — it is not needed to send mail, so answer `n` if you just want to build. The values shown in the preview come from each template's `PreviewProps`.
+
+Sent mail lands in Mailpit (<http://localhost:8025>) with the default `.env` settings; nothing leaves the machine.
+
 ## Libraries
 
 | Purpose    | Library                              |
@@ -85,6 +99,7 @@ E2E tests run against a separate, isolated database (not your dev database), so 
 | Validation | Joi                                  |
 | ORM        | TypeORM (`@nestjs/typeorm`)          |
 | Database   | PostgreSQL (`pg`)                    |
+| Email      | Nodemailer + React Email             |
 | CSV        | `csv-parse` / `csv-stringify`        |
 | XML        | `fast-xml-parser`                    |
 | YAML       | `yaml` (v2, YAML 1.2)                |

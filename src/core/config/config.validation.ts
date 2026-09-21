@@ -75,6 +75,7 @@ export const configValidationSchema = Joi.object<Config>({
    */
   SMTP_HOST: Joi.string().hostname().required(),
   SMTP_PORT: Joi.number().port().required(),
+  SMTP_SECURE: Joi.boolean().optional().default(false),
   SMTP_USER: Joi.string().allow('').optional().default(''),
   SMTP_PASSWORD: Joi.string().allow('').optional().default(''),
   SMTP_FROM: Joi.string().email().required(),

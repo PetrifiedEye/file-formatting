@@ -49,6 +49,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# react-email preview server build output
+.react-email
+
 # temp directory
 .temp
 .tmp
