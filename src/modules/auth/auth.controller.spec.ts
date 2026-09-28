@@ -5,7 +5,7 @@ import { ConfigService } from '@/core/config/config.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { PasswordResetService } from './password-reset.service';
+import { PasswordResetService } from '@/modules/auth/password-reset/password-reset.service';
 
 describe('AuthController', () => {
   let controller: AuthController;

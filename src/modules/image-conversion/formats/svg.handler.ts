@@ -1,7 +1,6 @@
 import { renderAsync } from '@resvg/resvg-js';
 import type { ResvgRenderOptions } from '@resvg/resvg-js';
 import { Injectable } from '@nestjs/common';
-import sharp from 'sharp';
 
 import { ConversionErrorCode } from '@/modules/conversion/conversion.constants';
 import { ImageFormat } from '@/modules/conversion/conversion.enums';
@@ -18,7 +17,11 @@ import type {
   ImageFormatHandler,
 } from './image-format-handler';
 import { looksLikeSvg } from './image-signatures';
-import { createRasterImage, RasterImage } from './raster-image';
+import {
+  createPipelineRasterImage,
+  createRasterImage,
+  RasterImage,
+} from './raster-image';
 import { resolveIntrinsicSize } from './svg-intrinsic-size';
 import { validateSvg } from './svg-security';
 
@@ -63,45 +66,47 @@ export class SvgHandler implements ImageFormatHandler {
     context.signal?.throwIfAborted();
 
     // 3. Only now is anything rendered.
-    const rendered = await this.render(validated.text, size, context);
+    const rendered = await this.render(validated.text, context);
 
-    return createRasterImage(
-      {
-        data: rendered.data,
-        width: rendered.width,
-        height: rendered.height,
-        channels: 4,
-        hasAlpha: true,
-      },
-      { maxPixels: context.limits.maxPixels },
-    );
+    return this.fit(rendered, size, context.limits.maxPixels);
   }
 
+  /**
+   * Rasterise onto a **transparent** canvas.
+   *
+   * The background is not painted here: the encoder composites the request's
+   * background under the image, the same way for every source. Painting it
+   * here too would apply a translucent one twice — and a JPEG target still
+   * gets white under a transparent drawing, because that is its encoder's
+   * rule.
+   */
   private async render(
     svg: string,
-    size: { width: number; height: number },
     context: ImageConversionContext,
   ): Promise<{ data: Buffer; width: number; height: number }> {
+    const { limits } = context;
+    const family = limits.svgDefaultFontFamily;
     const options: ResvgRenderOptions = {
       // No scaling: the drawing is rendered at the size the rule resolved.
       fitTo: { mode: 'original' },
-      background: context.limits.backgroundColor,
       font: {
-        // Off, so rendering is deterministic and the renderer never scans the
-        // filesystem. The documented consequence: with no font directory
-        // configured, `<text>` renders as nothing. Substituting whatever font
-        // a host happens to have would make output non-reproducible.
-        loadSystemFonts: false,
-        ...(context.limits.svgFontDir
-          ? { fontDirs: [context.limits.svgFontDir] }
-          : {}),
+        // The bundled fonts, so `<text>` renders the same on every host. A
+        // host's own fonts only when asked for: they make output depend on
+        // the machine.
+        loadSystemFonts: limits.svgLoadSystemFonts,
+        ...(limits.svgFontDir ? { fontDirs: [limits.svgFontDir] } : {}),
+        // Text naming no font, a generic family, or a font that is not
+        // installed falls back to this rather than to nothing at all — resvg
+        // drops a glyph it has no font for, which is how text disappeared.
+        defaultFontFamily: family,
+        sansSerifFamily: family,
+        serifFamily: family,
+        monospaceFamily: family,
+        cursiveFamily: family,
+        fantasyFamily: family,
       },
       logLevel: 'off',
     };
-
-    let width: number;
-    let height: number;
-    let pixels: Buffer;
 
     try {
       // `renderAsync` rather than `new Resvg().render()`: it runs off the
@@ -109,9 +114,9 @@ export class SvgHandler implements ImageFormatHandler {
       // drawing cannot block unrelated requests.
       const image = await renderAsync(svg, options, context.signal ?? null);
 
-      width = image.width;
-      height = image.height;
-      pixels = image.pixels;
+      // One copy of the pixels on the JS heap; the renderer's own is released
+      // with `image`, which goes out of scope here.
+      return { data: image.pixels, width: image.width, height: image.height };
     } catch (error) {
       if (context.signal?.aborted) {
         throw error;
@@ -120,13 +125,6 @@ export class SvgHandler implements ImageFormatHandler {
       // Renderer messages can quote the document; none escapes this call.
       throw new ConversionException(ConversionErrorCode.SVG_RENDER_FAILED);
     }
-
-    return this.fit(
-      pixels,
-      { width, height },
-      size,
-      context.limits.backgroundColor,
-    );
   }
 
   /**
@@ -135,50 +133,53 @@ export class SvgHandler implements ImageFormatHandler {
    * They agree in every case but one: the rule rounds a fractional dimension
    * **up** so a 10.2px drawing is never clipped, while resvg rounds to
    * nearest and would produce 10. Rather than let the library silently
-   * redefine a documented rule, the canvas is extended to the resolved size
-   * with the background colour — the drawing itself is neither scaled nor
-   * moved, so nothing is clipped and the output is exactly the size the
-   * contract promises.
+   * redefine a documented rule, the canvas is extended to the resolved size —
+   * transparently, like the rest of the canvas — and the drawing itself is
+   * neither scaled nor moved, so nothing is clipped and the output is exactly
+   * the size the contract promises.
+   *
+   * The extension is part of the hub's pipeline rather than a second buffer:
+   * it happens inside libvips while the target encodes.
    */
-  private async fit(
-    pixels: Buffer,
-    actual: { width: number; height: number },
+  private fit(
+    rendered: { data: Buffer; width: number; height: number },
     wanted: { width: number; height: number },
-    background: string,
-  ): Promise<{ data: Buffer; width: number; height: number }> {
+    maxPixels: number,
+  ): RasterImage {
+    const actual = rendered;
+    const image = createRasterImage(
+      { ...rendered, channels: 4, hasAlpha: true },
+      { maxPixels },
+    );
+
     if (actual.width === wanted.width && actual.height === wanted.height) {
-      return { data: pixels, width: actual.width, height: actual.height };
+      return image;
     }
 
-    const canvas = sharp(pixels, {
-      raw: { width: actual.width, height: actual.height, channels: 4 },
-    }).extend({
-      top: 0,
-      left: 0,
-      right: Math.max(0, wanted.width - actual.width),
-      bottom: Math.max(0, wanted.height - actual.height),
-      // The same colour the drawing was rendered over, so an extended edge is
-      // indistinguishable from the canvas it extends.
-      background,
-    });
+    return createPipelineRasterImage(
+      { ...wanted, channels: 4, hasAlpha: true, decodesOnRead: false },
+      { maxPixels },
+      () => {
+        const canvas = image.toSharp().extend({
+          top: 0,
+          left: 0,
+          right: Math.max(0, wanted.width - actual.width),
+          bottom: Math.max(0, wanted.height - actual.height),
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        });
 
-    // A resolved size *smaller* than what was rendered should be impossible —
-    // ceiling is never below round — but cropping rather than trusting that
-    // keeps the promised dimensions true either way.
-    const bounded =
-      actual.width > wanted.width || actual.height > wanted.height
-        ? canvas.extract({
-            left: 0,
-            top: 0,
-            width: wanted.width,
-            height: wanted.height,
-          })
-        : canvas;
-
-    const { data, info } = await bounded
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-
-    return { data, width: info.width, height: info.height };
+        // A resolved size *smaller* than what was rendered should be
+        // impossible — ceiling is never below round — but cropping rather
+        // than trusting that keeps the promised dimensions true either way.
+        return actual.width > wanted.width || actual.height > wanted.height
+          ? canvas.extract({
+              left: 0,
+              top: 0,
+              width: wanted.width,
+              height: wanted.height,
+            })
+          : canvas;
+      },
+    );
   }
 }

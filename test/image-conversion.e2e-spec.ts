@@ -1,15 +1,8 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
-import fastifyCookie from '@fastify/cookie';
-import fastifyMultipart from '@fastify/multipart';
-import fastifyStatic from '@fastify/static';
 import { createServer, Server } from 'net';
 import { readFileSync } from 'fs';
 import { access, readdir, rm } from 'fs/promises';
@@ -26,7 +19,7 @@ import {
 import { AppModule } from '../src/core/app/app.module';
 import { ConfigService } from '../src/core/config/config.service';
 import { ConversionRecord } from '../src/modules/conversion/entities/conversion-record.entity';
-import { ConversionRetentionService } from '../src/modules/conversion/conversion-retention.service';
+import { ConversionRetentionService } from '../src/modules/conversion/history/conversion-retention.service';
 import { ConversionStoredFile } from '../src/modules/conversion/entities/conversion-stored-file.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
@@ -35,6 +28,7 @@ import {
   TransformationResultAuditAction,
   TransformationResultAuditOutcome,
 } from '../src/modules/transformation-result-storage/transformation-result.enums';
+import { createTestApp } from './support/create-test-app';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 const FIXTURES = join(__dirname, 'support', 'image-fixtures');
@@ -149,44 +143,9 @@ describe('Image Conversion (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-
     configService = moduleFixture.get(ConfigService);
 
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, { secret: configService.get('COOKIE_SECRET') });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyMultipart, {
-        limits: {
-          fileSize: Number(configService.get('PHOTO_MAX_SIZE_BYTES')),
-          files: 1,
-        },
-      });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyStatic, {
-        root: resolve(configService.get('ASSETS_DIR')),
-        prefix: '/assets/',
-      });
-
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
     recordRepository = moduleFixture.get(getRepositoryToken(ConversionRecord));
@@ -318,10 +277,9 @@ describe('Image Conversion (e2e)', () => {
     });
 
     /** SC-003, pixel by pixel. */
-    it('composites a transparent PNG onto the configured background', async () => {
-      const background = configService.get('IMAGE_BACKGROUND_COLOR');
-
-      expect(background).toBe('#ffffff');
+    it('composites a transparent PNG onto white for JPEG by default', async () => {
+      // The default background is `transparent`, which a JPEG cannot be.
+      expect(configService.get('IMAGE_BACKGROUND_COLOR')).toBe('transparent');
 
       const response = await convert(
         fixture('fully-transparent.png'),
@@ -338,10 +296,100 @@ describe('Image Conversion (e2e)', () => {
       expect(info.channels).toBe(3);
 
       for (let index = 0; index < data.length; index += 1) {
-        // Fully transparent everywhere, so the result is the background
-        // throughout. JPEG is lossy, hence the tolerance.
+        // Fully transparent everywhere, so the result is white throughout.
+        // JPEG is lossy, hence the tolerance.
         expect(data[index]).toBeGreaterThan(245);
       }
+    });
+
+    describe('backgroundColor', () => {
+      const withBackground = (
+        body: Buffer,
+        filename: string,
+        targetFormat: string,
+        backgroundColor: string,
+      ) =>
+        request(baseUrl)
+          .post('/api/images/convert')
+          .set('Cookie', cookie)
+          .attach('file', body, filename)
+          .field('targetFormat', targetFormat)
+          .field('backgroundColor', backgroundColor);
+
+      const cornerOf = async (body: Buffer) => {
+        const { data, info } = await sharp(body)
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        return [...data.subarray(0, info.channels)];
+      };
+
+      it('renders an SVG onto a transparent canvas by default', async () => {
+        const response = await convert(
+          fixture('text-on-transparent.svg'),
+          'text-on-transparent.svg',
+          'png',
+        );
+
+        expect(response.status).toBe(200);
+        expect((await cornerOf(response.body as Buffer))[3]).toBe(0);
+      });
+
+      it('renders SVG <text> (it used to vanish)', async () => {
+        const response = await convert(
+          fixture('text-on-transparent.svg'),
+          'text-on-transparent.svg',
+          'png',
+        );
+        const { data } = await sharp(response.body as Buffer)
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+
+        let inked = 0;
+        for (let alpha = 3; alpha < data.length; alpha += 4) {
+          if (data[alpha] > 0) inked += 1;
+        }
+        expect(inked).toBeGreaterThan(500);
+      });
+
+      it('applies a requested colour to an SVG', async () => {
+        const response = await withBackground(
+          fixture('text-on-transparent.svg'),
+          'text-on-transparent.svg',
+          'png',
+          '#ff0000',
+        );
+
+        expect(response.status).toBe(200);
+        expect((await cornerOf(response.body as Buffer)).slice(0, 3)).toEqual([
+          255, 0, 0,
+        ]);
+      });
+
+      it('applies a requested colour to a transparent PNG', async () => {
+        const response = await withBackground(
+          fixture('fully-transparent.png'),
+          'fully-transparent.png',
+          'jpeg',
+          '#0000ff',
+        );
+        const [r, g, b] = await cornerOf(response.body as Buffer);
+
+        expect(r).toBeLessThan(15);
+        expect(g).toBeLessThan(15);
+        expect(b).toBeGreaterThan(240);
+      });
+
+      it('refuses a malformed colour with its own code', async () => {
+        const response = await withBackground(
+          fixture('solid.png'),
+          'solid.png',
+          'jpeg',
+          'red',
+        );
+
+        expect(response.status).toBe(400);
+        expect(response.body.code).toBe('invalid_background_color');
+      });
     });
 
     it('carries no metadata into the result', async () => {
@@ -763,6 +811,18 @@ describe('Image Conversion (e2e)', () => {
       expect(response.body.code).toBe('unexpected_part');
     });
 
+    it('refuses a second file as a conversion error, not a 500', async () => {
+      const response = await request(baseUrl)
+        .post('/api/images/convert')
+        .set('Cookie', cookie)
+        .attach('file', fixture('solid.png'), 'solid.png')
+        .attach('file', fixture('solid.png'), 'again.png')
+        .field('targetFormat', 'jpeg');
+
+      expect(response.status).toBe(413);
+      expect(response.body.code).toBe('input_too_large');
+    });
+
     it('refuses a request with no file part', async () => {
       const response = await request(baseUrl)
         .post('/api/images/convert')
@@ -1142,7 +1202,7 @@ describe('Image Conversion (e2e)', () => {
       expect(formats().tags).toEqual(['image-conversion']);
     });
 
-    it('documents the three multipart parts', () => {
+    it('documents the four multipart parts', () => {
       const schema =
         convert().requestBody!.content['multipart/form-data'].schema;
 
@@ -1150,6 +1210,7 @@ describe('Image Conversion (e2e)', () => {
         'multipart/form-data',
       ]);
       expect(Object.keys(schema.properties ?? {}).sort()).toEqual([
+        'backgroundColor',
         'file',
         'store',
         'targetFormat',
@@ -1173,6 +1234,7 @@ describe('Image Conversion (e2e)', () => {
         '415',
         '429',
         '500',
+        '503',
       ]);
       expect(Object.keys(formats().responses).sort()).toEqual([
         '200',
@@ -1220,7 +1282,7 @@ describe('Image Conversion (e2e)', () => {
     });
 
     it('describes every error body with the shared envelope', () => {
-      for (const status of ['400', '413', '415', '500']) {
+      for (const status of ['400', '413', '415', '500', '503']) {
         expect(
           convert().responses[status].content!['application/json'].schema.$ref,
         ).toContain('ConversionErrorResponseDto');

@@ -164,8 +164,23 @@ describe('validateSvg', () => {
       ['an empty href', '<use href=""/>'],
       ['a plain colour fill', '<rect fill="#ff0000"/>'],
       ['a gradient definition', '<defs><linearGradient id="g"/></defs>'],
+      // Text that reads like an attribute is a drawing of text, not a handler.
+      [
+        'text that looks like an attribute',
+        '<text x="1" y="9">ask one = two</text>',
+      ],
     ])('%s', (_name, body) => {
       expect(() => validateSvg(Buffer.from(svg(body)))).not.toThrow();
+    });
+
+    it('still refuses a handler attribute next to such text', () => {
+      expect(() =>
+        validateSvg(
+          Buffer.from(svg('<text onclick="x()">ask one = two</text>')),
+        ),
+      ).toThrow(
+        expect.objectContaining({ code: 'svg_active_content' }) as never,
+      );
     });
   });
 

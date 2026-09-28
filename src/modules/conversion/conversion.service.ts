@@ -1,4 +1,6 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+
+import { ConcurrencyLimiter } from '@/core/concurrency/concurrency-limiter';
 
 import { ConversionErrorCode } from './conversion.constants';
 import {
@@ -7,41 +9,40 @@ import {
   TransformationType,
 } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
-import { ConversionHistoryService } from './conversion-history.service';
-import { ConversionRetentionService } from './conversion-retention.service';
-import { FormatDetectorService } from './format-detector.service';
-import { FormatRegistryService } from './format-registry.service';
-import { guardStructure } from './formats/document-node';
+import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
+import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
+import { FormatDetectorService } from '@/modules/conversion/detection/format-detector.service';
+import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
 import { CONVERSION_LIMITS } from './formats/format-handler';
 import type { ConversionLimits } from './formats/format-handler';
-import { UploadReader } from './upload-reader';
+import {
+  acquireConversionSlot,
+  startDeadline,
+} from './pipeline/conversion-deadline';
+import {
+  DOCUMENT_CONVERSION_EXECUTOR,
+  InProcessDocumentConversionExecutor,
+} from './pipeline/document-conversion.executor';
+import type { DocumentConversionExecutor } from './pipeline/document-conversion.executor';
+import type {
+  CollectedUpload,
+  UploadAttempt,
+} from '@/modules/conversion/upload/multipart-upload';
+import { UploadReader } from '@/modules/conversion/upload/upload-reader';
+
+/** A document upload as read by `DocumentUploadPipe`. */
+export type DocumentUpload = CollectedUpload<ReceivedUpload, ConversionFormat>;
 
 /**
- * What the request has revealed about itself so far.
+ * What the boundary produced: the whole upload, decoded and size-capped.
  *
- * Filled in progressively, because an attempt can fail before any of it is
- * known — a document whose format is undetectable has no source format, and a
- * request naming an unsupported target has no target. The history row records
- * whatever was true at the point of failure.
+ * Its format is not decided yet — for every format but XML that takes a full
+ * parse, which belongs to the conversion (on a worker thread, under the
+ * deadline) rather than to the request body being read.
  */
-export interface AttemptState {
-  originalFileName: string;
-  sourceFormat: ConversionFormat | null;
-  targetFormat: ConversionFormat | null;
-  inputSizeBytes: number;
-  retentionRequested: boolean;
-}
-
-/** What the controller produces once every part has been seen. */
-export interface CollectedRequest {
-  received: ReceivedUpload;
-  targetFormat: ConversionFormat;
-}
-
-/** What the boundary produced: a decoded document and the format it is in. */
 export interface ReceivedUpload {
   text: string;
-  sourceFormat: ConversionFormat;
+  fileName: string;
   sizeBytes: number;
 }
 
@@ -59,9 +60,10 @@ export interface ConversionResult {
  * The conversion pipeline, in the order the contract fixes.
  *
  * It is split in two because the multipart stream forces it to be. {@link
- * receive} runs while that stream is still open — the only moment at which the
- * remainder of an oversized upload can be left unread (SC-006) — and {@link
- * convert} runs once every part has been seen and the fields are validated.
+ * receive} runs while that stream is still open — `DocumentUploadPipe` calls it
+ * as the file part arrives, the only moment at which the remainder of an
+ * oversized upload can be left unread (SC-006) — and {@link convert} runs once
+ * every part has been seen and the fields are validated.
  *
  * The result is serialized **completely into a buffer** before the caller is
  * told anything, which is what makes a partial file unrepresentable (FR-008).
@@ -71,17 +73,12 @@ export class ConversionService {
   private readonly logger = new Logger(ConversionService.name);
 
   /**
-   * Bounds how many conversions hold a parsed document at once.
-   *
-   * Honest framing: this bounds **memory, not latency**. Node runs one
-   * synchronous parse at a time whatever this is set to, so a long
-   * `JSON.parse` delays unrelated requests either way — the lever that
-   * actually protects SC-008 is keeping any single parse short, which the
-   * per-format byte caps do. What a semaphore prevents is ten concurrent
-   * uploads each holding a 5 MiB buffer and its expanded model.
+   * Bounds how many conversions run at once — each on its own worker thread,
+   * holding an input and its expanded model — and how many may wait. Past the
+   * queue, a request is refused with `service_busy` at once.
    */
-  private active = 0;
-  private readonly waiting: (() => void)[] = [];
+  private readonly limiter: ConcurrencyLimiter;
+  private readonly executor: DocumentConversionExecutor;
 
   constructor(
     private readonly registry: FormatRegistryService,
@@ -89,14 +86,28 @@ export class ConversionService {
     private readonly history: ConversionHistoryService,
     private readonly retention: ConversionRetentionService,
     @Inject(CONVERSION_LIMITS) private readonly limits: ConversionLimits,
-  ) {}
+    // Worker threads in the application (see ConversionModule). Constructed
+    // by hand — as the unit tests do — the pipeline runs on the calling thread.
+    @Optional()
+    @Inject(DOCUMENT_CONVERSION_EXECUTOR)
+    executor?: DocumentConversionExecutor,
+  ) {
+    this.limiter = new ConcurrencyLimiter(
+      limits.maxConcurrent,
+      limits.maxQueue,
+    );
+    this.executor =
+      executor ?? new InProcessDocumentConversionExecutor(registry, detector);
+  }
 
   /**
    * One attempt, start to finish, recorded whatever happens.
    *
-   * `collect` is supplied by the controller because reading a multipart body is
-   * an HTTP concern; everything around it — the clock, the history row, the log
-   * line — belongs here.
+   * Reading the multipart body is an HTTP concern and happens first, in
+   * `DocumentUploadPipe`; a refusal there arrives here as `upload.failure`
+   * together with everything learned before it. Everything around the
+   * conversion — the history row, the log line — belongs here, and the clock
+   * runs from when the pipe began reading.
    *
    * The record is written from a `finally` and **outside any transaction**, so
    * it survives every failure path: a refused request, a parse error, a rollback
@@ -105,24 +116,28 @@ export class ConversionService {
    */
   async execute(
     userId: string,
-    collect: (state: AttemptState) => Promise<CollectedRequest>,
+    upload: DocumentUpload,
   ): Promise<ConversionResult> {
-    const startedAt = new Date();
-    const startedMs = Date.now();
-    const state: AttemptState = {
-      originalFileName: '',
-      sourceFormat: null,
-      targetFormat: null,
-      inputSizeBytes: 0,
-      retentionRequested: false,
-    };
+    const state = upload.attempt;
+    const startedAt = state.startedAt;
 
     let result: ConversionResult | undefined;
     let failure: unknown;
 
     try {
-      const collected = await collect(state);
-      result = await this.convert(collected.received, collected.targetFormat);
+      if (!upload.ok) {
+        throw upload.failure;
+      }
+
+      result = await this.convert(
+        upload.received,
+        upload.targetFormat,
+        (format) => {
+          // Known only once the conversion has detected it — and recorded
+          // then, so a refusal after detection still says what the file was.
+          state.sourceFormat = format;
+        },
+      );
 
       if (state.retentionRequested) {
         // Pessimistic until history-first finalization durably links the file.
@@ -134,7 +149,7 @@ export class ConversionService {
       failure = error;
       throw error;
     } finally {
-      const durationMs = Date.now() - startedMs;
+      const durationMs = Date.now() - startedAt.getTime();
 
       // Written first, and outside any transaction, so that nothing later can
       // erase the record of the attempt (FR-024). It claims `failed` for a
@@ -209,7 +224,7 @@ export class ConversionService {
    */
   private log(
     userId: string,
-    state: AttemptState,
+    state: UploadAttempt<ConversionFormat>,
     failure: unknown,
     durationMs: number,
   ): void {
@@ -237,13 +252,14 @@ export class ConversionService {
   }
 
   /**
-   * Steps 4–6: consume the upload under the detected source format's budget and
-   * decide what it is.
+   * Steps 4–5: consume the upload under a byte budget and validate its
+   * encoding. Called by `DocumentUploadPipe` while the file part's stream is
+   * still open.
    *
-   * The budget is applied in two stages because FR-016 sets the limit per source
-   * format and the format is not knowable until some bytes exist: a bounded
-   * prefix names the plausible formats, the most permissive of those bounds the
-   * read, and the detected format's own limit is applied once it is known.
+   * FR-016 sets the limit per source format, and the format is not knowable
+   * until some bytes exist: a bounded prefix names the plausible formats, and
+   * the most permissive of those bounds the read. The detected format's own
+   * limit is applied once detection settles it, in the conversion.
    */
   async receive(
     reader: UploadReader,
@@ -280,154 +296,67 @@ export class ConversionService {
     // have split a multi-byte character.
     const decoded = this.detector.decode(input);
 
-    const sourceFormat = await this.detector.detect(
-      decoded,
-      this.limits,
-      originalFileName,
-    );
-
-    // FR-016: the limit that applies is the *detected* format's, which is why
-    // the same byte count can be accepted as XML and refused as CSV.
-    const applicable = this.registry.maxInputBytesFor(sourceFormat);
-
-    if (input.length > applicable) {
-      throw new ConversionException(ConversionErrorCode.INPUT_TOO_LARGE, {
-        limit: applicable,
-      });
-    }
-
-    return { text: decoded.text, sourceFormat, sizeBytes: input.length };
+    return {
+      text: decoded.text,
+      fileName: originalFileName,
+      sizeBytes: input.length,
+    };
   }
 
-  /** Steps 7–10, under the time budget. */
+  /**
+   * Steps 6–10 — detect, apply the detected format's limit, parse, guard,
+   * serialize — under the time budget and the concurrency bound, on a worker
+   * thread.
+   *
+   * The deadline starts before the queue: waiting behind other conversions
+   * must not buy a request extra time.
+   */
   async convert(
     received: ReceivedUpload,
     targetFormat: ConversionFormat,
+    onSourceFormat?: (format: ConversionFormat) => void,
   ): Promise<ConversionResult> {
-    const deadline = this.startDeadline();
+    const deadline = startDeadline(this.limits.timeoutMs);
 
     try {
-      // Waiters are subject to the same deadline: queueing behind four other
-      // conversions must not buy a request extra time.
-      await this.acquire(deadline);
+      const release = await acquireConversionSlot(this.limiter, deadline);
 
       try {
-        return await this.runPipeline(received, targetFormat, deadline);
+        const outcome = await this.executor.run(
+          {
+            text: received.text,
+            fileName: received.fileName,
+            sizeBytes: received.sizeBytes,
+            targetFormat,
+            limits: this.limits,
+          },
+          deadline.signal,
+        );
+
+        if (outcome.sourceFormat) {
+          onSourceFormat?.(outcome.sourceFormat);
+        }
+
+        deadline.check();
+
+        if (!outcome.ok) {
+          throw new ConversionException(outcome.code, outcome.params);
+        }
+
+        return {
+          buffer: Buffer.from(outcome.output),
+          mediaType: outcome.mediaType,
+          extension: outcome.extension,
+          sourceFormat: outcome.sourceFormat,
+          targetFormat,
+          inputSizeBytes: received.sizeBytes,
+          retentionOutcome: ConversionRetentionOutcome.NOT_REQUESTED,
+        };
       } finally {
-        this.release();
+        release();
       }
     } finally {
       deadline.dispose();
     }
   }
-
-  private async acquire(deadline: Deadline): Promise<void> {
-    if (this.active < this.limits.maxConcurrent) {
-      this.active += 1;
-      return;
-    }
-
-    await new Promise<void>((resolve) => this.waiting.push(resolve));
-    this.active += 1;
-
-    try {
-      deadline.check();
-    } catch (error) {
-      // The slot was taken the moment the waiter resumed, so it has to be
-      // handed on here — otherwise a queue of already-expired requests would
-      // consume the pool one slot at a time and never give any back.
-      this.release();
-      throw error;
-    }
-  }
-
-  private release(): void {
-    this.active -= 1;
-    this.waiting.shift()?.();
-  }
-
-  private async runPipeline(
-    received: ReceivedUpload,
-    targetFormat: ConversionFormat,
-    deadline: Deadline,
-  ): Promise<ConversionResult> {
-    // Step 7. A bad request, not a 415: both formats are supported.
-    if (received.sourceFormat === targetFormat) {
-      throw new ConversionException(ConversionErrorCode.SAME_FORMAT);
-    }
-
-    const source = this.registry.requireHandler(
-      received.sourceFormat,
-      ConversionErrorCode.UNSUPPORTED_SOURCE_FORMAT,
-    );
-    const target = this.registry.requireHandler(
-      targetFormat,
-      ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
-    );
-
-    const context = { limits: this.limits, signal: deadline.signal };
-
-    // Step 8.
-    const model = await source.read(received.text, context);
-    deadline.check();
-
-    // Step 9: one shared walk, whatever format produced the model.
-    guardStructure(model, this.limits);
-
-    // Step 10: serialize completely, then measure. Nothing has been written to
-    // the response at this point, and nothing will be until this succeeds.
-    const buffer = await target.write(model, context);
-    deadline.check();
-
-    if (buffer.length > this.limits.maxOutputBytes) {
-      throw new ConversionException(ConversionErrorCode.OUTPUT_TOO_LARGE, {
-        limit: this.limits.maxOutputBytes,
-      });
-    }
-
-    return {
-      buffer,
-      mediaType: target.mediaType,
-      extension: target.extension,
-      sourceFormat: received.sourceFormat,
-      targetFormat,
-      inputSizeBytes: received.sizeBytes,
-      retentionOutcome: ConversionRetentionOutcome.NOT_REQUESTED,
-    };
-  }
-
-  /**
-   * The time budget, taken once the upload is complete (FR-019).
-   *
-   * Checked at every `await` boundary, and handed to the handlers as an
-   * `AbortSignal` so the one incremental parser we have can stop mid-document.
-   *
-   * Its limit, stated plainly: a single synchronous `JSON.parse` or
-   * `yaml.parse` cannot be interrupted once entered. For those the real bound
-   * on worst-case time is the per-format byte cap, not this timer — which is
-   * why the caps default low. The timer catches everything around them.
-   */
-  private startDeadline(): Deadline {
-    const controller = new AbortController();
-    const expiresAt = Date.now() + this.limits.timeoutMs;
-    const timer = setTimeout(() => controller.abort(), this.limits.timeoutMs);
-
-    return {
-      signal: controller.signal,
-      check: () => {
-        if (Date.now() >= expiresAt) {
-          throw new ConversionException(ConversionErrorCode.TIMEOUT, {
-            limit: this.limits.timeoutMs,
-          });
-        }
-      },
-      dispose: () => clearTimeout(timer),
-    };
-  }
-}
-
-interface Deadline {
-  signal: AbortSignal;
-  check: () => void;
-  dispose: () => void;
 }

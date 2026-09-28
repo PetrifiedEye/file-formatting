@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import sharp from 'sharp';
 
+import { ConcurrencyLimiter } from '@/core/concurrency/concurrency-limiter';
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 
 import { imageFixture } from './formats/image-test-support';
@@ -14,8 +15,8 @@ const USER = 'user-1';
 async function convert(
   harness: ServiceHarness,
   spec: RequestSpec,
-): Promise<ReturnType<typeof harness.service.execute>> {
-  return harness.service.execute(USER, fakeRequest(spec));
+): Promise<ReturnType<typeof harness.execute>> {
+  return harness.execute(USER, fakeRequest(spec));
 }
 
 async function refusalOf(
@@ -368,11 +369,13 @@ describe('ImageConversionService', () => {
   describe('the concurrency bound', () => {
     it('admits at most maxConcurrent conversions at once', async () => {
       const harness = buildService({ maxConcurrent: 2 });
-      const service = harness.service as unknown as { active: number };
+      const { limiter } = harness.service as unknown as {
+        limiter: ConcurrencyLimiter;
+      };
 
       let peak = 0;
       const sample = setInterval(() => {
-        peak = Math.max(peak, service.active);
+        peak = Math.max(peak, limiter.active);
       }, 1);
 
       await Promise.all(
@@ -384,16 +387,35 @@ describe('ImageConversionService', () => {
       clearInterval(sample);
 
       expect(peak).toBeLessThanOrEqual(2);
-      expect(service.active).toBe(0);
+      expect(limiter.active).toBe(0);
+    });
+
+    it('refuses with service_busy once the queue is full', async () => {
+      const harness = buildService({ maxConcurrent: 1, maxQueue: 0 });
+
+      const outcomes = await Promise.allSettled([
+        convert(harness, request('sixteen-bit.png', 'jpeg')),
+        convert(harness, request('sixteen-bit.png', 'jpeg')),
+      ]);
+
+      expect(outcomes[0].status).toBe('fulfilled');
+      expect(outcomes[1]).toMatchObject({
+        status: 'rejected',
+        reason: { code: 'service_busy' },
+      });
+      // A refused request is still an attempt, and is recorded as one.
+      expect(harness.history.record).toHaveBeenCalledTimes(2);
     });
 
     it('releases its slot on a failure as well as on success', async () => {
       const harness = buildService({ maxConcurrent: 1 });
-      const service = harness.service as unknown as { active: number };
+      const { limiter } = harness.service as unknown as {
+        limiter: ConcurrencyLimiter;
+      };
 
       await refusalOf(harness, request('truncated.png', 'jpeg'));
 
-      expect(service.active).toBe(0);
+      expect(limiter.active).toBe(0);
 
       await expect(
         convert(harness, request('solid.png', 'jpeg')),
@@ -725,8 +747,8 @@ describe('ImageConversionService', () => {
     const sources = [
       'image-conversion.service.ts',
       'image-conversion.controller.ts',
-      'image-format-detector.service.ts',
-      'image-format-registry.service.ts',
+      'detection/image-format-detector.service.ts',
+      'detection/image-format-registry.service.ts',
       'formats/svg.handler.ts',
       'formats/svg-security.ts',
       'formats/svg-intrinsic-size.ts',

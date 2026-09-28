@@ -1,5 +1,6 @@
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 
+import { pixelsOf } from './image-test-support';
 import { createRasterImage } from './raster-image';
 
 const BUDGET = { maxPixels: 1000 };
@@ -37,7 +38,7 @@ describe('createRasterImage', () => {
     expect(image.hasAlpha).toBe(false);
   });
 
-  it('builds a four-channel image carrying alpha', () => {
+  it('builds a four-channel image carrying alpha', async () => {
     const image = createRasterImage(
       {
         data: pixels(4, 4),
@@ -50,7 +51,7 @@ describe('createRasterImage', () => {
     );
 
     expect(image.hasAlpha).toBe(true);
-    expect(image.data).toHaveLength(2 * 2 * 4);
+    expect(await pixelsOf(image)).toHaveLength(2 * 2 * 4);
   });
 
   it('refuses a buffer that does not match width x height x channels', () => {
@@ -195,9 +196,10 @@ describe('createRasterImage', () => {
 
     expect(Object.keys(image).sort()).toEqual([
       'channels',
-      'data',
+      'decodesOnRead',
       'hasAlpha',
       'height',
+      'toSharp',
       'width',
     ]);
   });

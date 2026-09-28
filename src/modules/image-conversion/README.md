@@ -20,14 +20,14 @@ decode(source bytes) → RasterImage → encode(target bytes)
 ```
 
 A format is one `ImageFormatHandler` that may implement `decode`, `encode`, or
-both. The registry computes directions as *decoders × encoders, minus
-self-pairs*. Nothing enumerates a direction anywhere.
+both. The registry computes directions as _decoders × encoders, minus
+self-pairs_. Nothing enumerates a direction anywhere.
 
-| Handler | `decode` | `encode` |
-|---|---|---|
-| `PngHandler` | ✓ | ✓ |
-| `JpegHandler` | ✓ | ✓ |
-| `SvgHandler` | ✓ | **absent** |
+| Handler       | `decode` | `encode`   |
+| ------------- | -------- | ---------- |
+| `PngHandler`  | ✓        | ✓          |
+| `JpegHandler` | ✓        | ✓          |
+| `SvgHandler`  | ✓        | **absent** |
 
 Three handlers give exactly four directions: `png→jpeg`, `jpeg→png`,
 `svg→png`, `svg→jpeg`.
@@ -46,7 +46,7 @@ moment one exists, vectorisation becomes representable and this stops being
 structural. `svg.handler.spec.ts` asserts the absence.
 
 The same property makes discovery honest: `GET …/formats` and `POST …/convert`
-read the *same computation*, so they cannot drift. Two lists would.
+read the _same computation_, so they cannot drift. Two lists would.
 
 ---
 
@@ -54,13 +54,24 @@ read the *same computation*, so they cannot drift. Two lists would.
 
 ```ts
 interface RasterImage {
-  data: Buffer;   // row-major, 8 bits per channel
-  width: number;  // post-orientation
+  width: number; // post-orientation
   height: number;
   channels: 3 | 4;
   hasAlpha: boolean;
+  decodesOnRead: boolean; // producing the pixels still decodes the upload
+  toSharp(): sharp.Sharp; // a pipeline yielding the pixels, 8 bits/channel
 }
 ```
+
+**Its pixels are a pipeline, not a buffer.** A decoded PNG or JPEG is never
+expanded into a `width × height × channels` buffer on the JS heap: decode and
+encode run as one libvips pass, while the target encodes. Measured on a
+16-megapixel PNG → JPEG, peak RSS per conversion went from ~146 MiB (raw frame
+on the heap, plus libvips' own) to ~113 MiB — libvips and the JPEG encoder
+alone account for ~93 MiB of that. A rendered SVG holds one copy of its pixels
+(the canvas extension below happens inside the same pipeline). The flip side:
+a file whose header is fine but whose payload is truncated is only found out
+while encoding; `decodesOnRead` is what still reports it as `image_invalid`.
 
 **It has no metadata field, and that is the mechanism.** EXIF, GPS, camera
 data, and colour profiles cannot cross it because there is nowhere for them to
@@ -77,10 +88,10 @@ stored raster would fail for an image that converted perfectly.
 ## Safety, in the order it is applied
 
 1. **Session** — before any byte is read.
-2. **Per-source-format byte budget**, applied *while the upload streams*. The
+2. **Per-source-format byte budget**, applied _while the upload streams_. The
    reader destroys the stream the moment the budget is passed, so an oversized
    upload is refused without being read to the end. The budget is the
-   *detected* format's, which is why the same byte count is accepted as PNG and
+   _detected_ format's, which is why the same byte count is accepted as PNG and
    refused as SVG.
 3. **Content-based detection** from magic bytes. The file name is a secondary
    hint only: a `.png` file containing JPEG bytes is converted as JPEG. Every
@@ -89,14 +100,14 @@ stored raster would fail for an image that converted perfectly.
    must be able to tell "wrong kind of file" from "broken file of the right
    kind".
 4. **SVG safety** (SVG only) — see below.
-5. **Size** — the pixel budget for rasters, read from the container *header*
+5. **Size** — the pixel budget for rasters, read from the container _header_
    before any allocation; the intrinsic-size rule for SVG, resolved before the
    renderer is constructed.
 6. **Decode, encode**, under a deadline and a concurrency bound.
 7. **Output ceiling**, on the complete buffer, before any header is written.
 
 Steps 5 and 7 are where most of the value is. The pixel budget is checked
-against what the header *declares*: a 229-byte PNG declaring 30000×30000 is
+against what the header _declares_: a 229-byte PNG declaring 30000×30000 is
 refused having allocated nothing, where a reader that trusted the declaration
 would ask for 3.6 GB. And because the encoder returns a complete buffer that is
 measured before a header is written, a partially written image is not a case to
@@ -107,16 +118,17 @@ handle — it is unrepresentable.
 Two independent checks, because they fail differently:
 
 - a **raw-text scan** for `<!DOCTYPE`, `<!ENTITY`, `<script`, `javascript:`,
-  `@import`, and `on<name>=`;
+  `@import`, and — in the markup only, not in text content, so a `<text>`
+  reading "someone = …" is not mistaken for a handler — `on<name>=`;
 - a **structured walk** (`fast-xml-parser`, `processEntities: false`) refusing
   active elements, `on*` attributes, and every reference that is not a
   same-document fragment or an inline `data:` URI.
 
-A construct would have to be invisible to the parser *and* invisible to a
-literal scan *and* meaningful to the renderer. A parser differential is the
+A construct would have to be invisible to the parser _and_ invisible to a
+literal scan _and_ meaningful to the renderer. A parser differential is the
 classic way a sanitizer is bypassed.
 
-**The validator never rewrites.** It refuses, or it passes the *original bytes*
+**The validator never rewrites.** It refuses, or it passes the _original bytes_
 to the renderer. Re-serializing would recreate exactly the differential the two
 checks exist to close: what was checked would no longer be what is rendered.
 
@@ -151,24 +163,44 @@ long a render can block, and that should be said here rather than assumed away.
 The intrinsic-size rule rounds a fractional dimension **up**, so a `10.2px`
 drawing is never clipped. resvg rounds to nearest and produces 10. Rather than
 let the library quietly redefine a documented rule, `SvgHandler.fit()` extends
-the canvas to the resolved size with the background colour — the drawing is
-neither scaled nor moved, and the output is exactly the size the contract
-promises. This is the only place the two disagree; every other worked example
+the canvas to the resolved size, transparently — the drawing is neither scaled
+nor moved, and the output is exactly the size the contract promises. This is the only place the two disagree; every other worked example
 in the contract matches resvg exactly.
 
 ### Fonts
 
-`loadSystemFonts` is **off**. Text renders using only fonts from
-`IMAGE_SVG_FONT_DIR`, if one is configured.
+resvg silently drops every glyph it has no font for — which is how `<text>`
+used to vanish: no fonts were configured at all. Now:
 
-**Stated plainly: with no font directory configured, `<text>` renders as
-nothing.** This is deliberate. Substituting whatever font a host happens to
-have would make the same SVG convert differently on two machines.
+- `IMAGE_SVG_FONT_DIR` defaults to the bundled `resources/fonts` (Geist
+  Regular, SIL OFL 1.1 — Latin and Cyrillic), so text renders the same on every
+  host;
+- `IMAGE_SVG_DEFAULT_FONT_FAMILY` (`Geist`) is what text falls back to when it
+  names no font, a generic family (`serif`, `monospace`, …) or a font that is
+  not installed;
+- `IMAGE_SVG_LOAD_SYSTEM_FONTS=true` also uses the host's fonts, for scripts
+  the bundled font lacks — at the price of output that depends on the machine.
+
+A configured font directory with no font in it is logged at startup.
+
+### Background
+
+`backgroundColor` (multipart field: `transparent`, `#rrggbb`, `#rrggbbaa`;
+default `IMAGE_BACKGROUND_COLOR`, itself `transparent`) is what transparent
+pixels are composited onto. It is applied once, by the encoder, whatever the
+source — SVG is rendered onto a transparent canvas:
+
+- **PNG** keeps transparency by default; an opaque colour flattens onto it; a
+  translucent one is laid under the image, keeping alpha.
+- **JPEG** cannot be transparent, so the colour is itself composited onto
+  white first: by default a transparent source comes out white, never black.
+
+A malformed value is `400 invalid_background_color`.
 
 ### Multi-frame input
 
 sharp's `animated: false` default means a multi-frame container yields its
-first frame. There is no generated fixture for this: libvips cannot *write* an
+first frame. There is no generated fixture for this: libvips cannot _write_ an
 APNG or a multi-frame GIF on the platforms this runs on, so a fixture would
 have to be an opaque committed blob. What is covered is the adjacent real case
 — a progressive (multi-scan) JPEG decoding to one complete image.
@@ -199,18 +231,21 @@ Nothing in this feature serves them over HTTP at all.
 
 ## Configuration
 
-Twelve `IMAGE_*` settings, all validated at startup with defaults, so an
+Fifteen `IMAGE_*` settings, all validated at startup with defaults, so an
 administrator retunes them with no code change and no migration. See
 [`.env.example`](../../../.env.example).
 
-Peak raster memory is bounded by `IMAGE_MAX_PIXELS × 4 bytes ×
-IMAGE_MAX_CONCURRENT` — 16 MP and 2 by default, so ≈128 MiB, plus input and
-output buffers bounded by the byte caps. `IMAGE_MAX_CONCURRENT` defaults
-*lower* than the text pipeline's because an image's expanded form is far larger
+Peak raster memory is bounded by roughly `IMAGE_MAX_PIXELS × 7 bytes ×
+IMAGE_MAX_CONCURRENT` — about 113 MiB per 16 MP conversion, measured, most of
+it inside libvips — plus input and output buffers bounded by the byte caps. `IMAGE_MAX_CONCURRENT` defaults
+_lower_ than the text pipeline's because an image's expanded form is far larger
 relative to its upload than a parsed document's is.
 
-The two semaphores are separate counters on purpose: sharing one would let a
-burst of text conversions starve image conversions of slots.
+The two pipelines have separate `ConcurrencyLimiter`s on purpose: sharing one
+would let a burst of text conversions starve image conversions of slots. Each
+admits `*_MAX_CONCURRENT` at once, queues up to `*_MAX_QUEUE` more (waiters
+leave the queue when their deadline passes), and refuses the rest at once with
+503 `service_busy`.
 
 ---
 
@@ -228,7 +263,7 @@ The worked example. To add WebP:
    in `image-conversion.module.ts`.
 4. Add `IMAGE_MAX_BYTES_WEBP` to the config types, the Joi schema, and the
    limits factory. (Skipping this is safe rather than unbounded: an
-   unconfigured format falls back to the *smallest* configured limit.)
+   unconfigured format falls back to the _smallest_ configured limit.)
 
 **What is not touched**: `PngHandler`, `JpegHandler`, `SvgHandler`, the
 controller, the request DTO, the discovery DTO, the registry, the detector, and
@@ -236,7 +271,7 @@ the service. Discovery immediately advertises `webp→png`, `webp→jpeg`,
 `png→webp`, `jpeg→webp`, and `svg→webp`, and the pipeline immediately accepts
 exactly those — because both read the same capability set.
 
-`image-format-registry.service.spec.ts` asserts precisely this with a fake
+`detection/image-format-registry.service.spec.ts` asserts precisely this with a fake
 handler: the direction set widens, and no existing handler is consulted.
 
 ---
@@ -245,10 +280,12 @@ handler: the direction set widens, and no existing handler is consulted.
 
 ```
 image-conversion.controller.ts      the two routes; no conversion logic
-image-conversion.service.ts         the pipeline, deadline, semaphore, history
+image-upload.pipe.ts                reads the multipart body (see the conversion README)
+image-conversion.service.ts         the pipeline, deadline, concurrency limit, history
 image-conversion.constants.ts       signatures, media types, extension hints
-image-format-registry.service.ts    capabilities in, directions out
-image-format-detector.service.ts    magic-byte detection over a bounded prefix
+detection/
+  image-format-registry.service.ts  capabilities in, directions out
+  image-format-detector.service.ts  magic-byte detection over a bounded prefix
 formats/
   image-format-handler.ts           the capability contract + DI tokens
   raster-image.ts                   the hub and its construction invariants

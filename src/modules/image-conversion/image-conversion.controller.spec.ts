@@ -58,6 +58,8 @@ function build(service: Partial<ImageConversionService>) {
 }
 
 const request = { user: { id: 'user-1' } } as never;
+/** Already read by `ImageUploadPipe`; the controller only passes it on. */
+const upload = { ok: true } as never;
 
 describe('ImageConversionController', () => {
   describe('POST /api/images/convert', () => {
@@ -67,7 +69,7 @@ describe('ImageConversionController', () => {
         execute: jest.fn().mockResolvedValue(result()),
       });
 
-      await controller.convert(request, reply as never);
+      await controller.convert(request, upload, reply as never);
 
       expect(reply.statusCode).toBe(HttpStatus.OK);
       expect(reply.headers['Content-Type']).toBe('image/jpeg');
@@ -85,7 +87,7 @@ describe('ImageConversionController', () => {
 
       await build({
         execute: jest.fn().mockResolvedValue(result({ extension: 'png' })),
-      }).convert(request, reply as never);
+      }).convert(request, upload, reply as never);
 
       expect(reply.headers['Content-Disposition']).toBe(
         'attachment; filename="converted.png"',
@@ -98,7 +100,7 @@ describe('ImageConversionController', () => {
 
       await build({
         execute: jest.fn().mockResolvedValue(result()),
-      }).convert(request, reply as never);
+      }).convert(request, upload, reply as never);
 
       expect(reply.headers['Content-Disposition']).not.toContain('holiday');
       expect(reply.headers['Content-Disposition']).toContain('converted.');
@@ -115,7 +117,7 @@ describe('ImageConversionController', () => {
         execute: jest
           .fn()
           .mockResolvedValue(result({ retentionOutcome: outcome })),
-      }).convert(request, reply as never);
+      }).convert(request, upload, reply as never);
 
       expect(reply.headers['X-Image-Conversion-Retention']).toBe(header);
     });
@@ -129,7 +131,7 @@ describe('ImageConversionController', () => {
 
       await build({
         execute: jest.fn().mockResolvedValue(result()),
-      }).convert(request, reply as never);
+      }).convert(request, upload, reply as never);
 
       expect(Object.keys(reply.headers)).toContain(
         'X-Image-Conversion-Retention',
@@ -139,12 +141,12 @@ describe('ImageConversionController', () => {
       );
     });
 
-    it('hands the service the caller s id and the request itself', async () => {
+    it('hands the service the caller s id and the upload the pipe read', async () => {
       const execute = jest.fn().mockResolvedValue(result());
 
-      await build({ execute }).convert(request, fakeReply() as never);
+      await build({ execute }).convert(request, upload, fakeReply() as never);
 
-      expect(execute).toHaveBeenCalledWith('user-1', request);
+      expect(execute).toHaveBeenCalledWith('user-1', upload);
     });
 
     /**
@@ -171,11 +173,11 @@ describe('ImageConversionController', () => {
       });
 
       await expect(
-        controller.convert(request, reply as never),
+        controller.convert(request, upload, reply as never),
       ).rejects.toMatchObject({ code });
 
       const thrown = await controller
-        .convert(request, reply as never)
+        .convert(request, upload, reply as never)
         .then(() => null)
         .catch((error: unknown) => error as ConversionException);
 

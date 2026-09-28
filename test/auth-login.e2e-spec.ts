@@ -1,10 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
-import fastifyCookie from '@fastify/cookie';
+import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import {
@@ -17,12 +12,12 @@ import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import { createHash } from 'crypto';
 
 import { AppModule } from '../src/core/app/app.module';
-import { ConfigService } from '../src/core/config/config.service';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { LoginChallenge } from '../src/modules/auth/entities/login-challenge.entity';
 import { PasswordResetChallenge } from '../src/modules/auth/entities/password-reset-challenge.entity';
 import { LoginAuditEvent } from '../src/modules/auth/entities/login-audit-event.entity';
 import { SystemSettings } from '../src/modules/settings/entities/system-settings.entity';
+import { createTestApp } from './support/create-test-app';
 
 function extractCookie(
   setCookieHeader: string[] | undefined,
@@ -78,26 +73,7 @@ describe('Auth Login (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    const fastifyApp =
-      moduleFixture.createNestApplication<NestFastifyApplication>(
-        new FastifyAdapter(),
-      );
-    app = fastifyApp;
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-
-    const configService = moduleFixture.get(ConfigService);
-    await fastifyApp.register(fastifyCookie, {
-      secret: configService.get('COOKIE_SECRET'),
-    });
-
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
 
     usersRepository = moduleFixture.get(getRepositoryToken(User));
     loginChallengeRepository = moduleFixture.get(

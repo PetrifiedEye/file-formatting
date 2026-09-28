@@ -4,12 +4,7 @@ import {
   INestApplication,
   Module,
   UseGuards,
-  ValidationPipe,
 } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
@@ -31,6 +26,7 @@ import { PermissionGuard } from '../src/modules/rbac/guards/permission.guard';
 import { RbacModule } from '../src/modules/rbac/rbac.module';
 import { User } from '../src/modules/users/entities/user.entity';
 import { attachRbacTestAuth } from './support/rbac-test-auth.module';
+import { createTestApp } from './support/create-test-app';
 
 @Controller('test-rbac')
 class TestRbacController {
@@ -65,19 +61,9 @@ describe('RBAC Access Check (e2e)', () => {
       imports: [AppModule, TestRbacControllerModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-    attachRbacTestAuth(app, moduleFixture);
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture, {
+      beforeInit: (created) => attachRbacTestAuth(created, moduleFixture),
+    }));
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));

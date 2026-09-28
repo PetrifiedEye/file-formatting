@@ -1,4 +1,6 @@
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
+import { existsSync, readdirSync } from 'fs';
+import { resolve } from 'path';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { ConfigModule } from '@/core/config/config.module';
@@ -25,8 +27,8 @@ import { PngHandler } from './formats/png.handler';
 import { SvgHandler } from './formats/svg.handler';
 import { ImageConversionController } from './image-conversion.controller';
 import { ImageConversionService } from './image-conversion.service';
-import { ImageFormatDetectorService } from './image-format-detector.service';
-import { ImageFormatRegistryService } from './image-format-registry.service';
+import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
+import { ImageFormatRegistryService } from '@/modules/image-conversion/detection/image-format-registry.service';
 
 /**
  * Image conversion.
@@ -93,12 +95,46 @@ import { ImageFormatRegistryService } from './image-format-registry.service';
         jpegQuality: Number(config.get('IMAGE_JPEG_QUALITY')),
         timeoutMs: Number(config.get('IMAGE_CONVERSION_TIMEOUT_MS')),
         maxConcurrent: Number(config.get('IMAGE_MAX_CONCURRENT')),
-        // Empty is meaningful, and is not the same as "some default
-        // directory": it means no fonts at all and no system-font scan.
-        svgFontDir: String(config.get('IMAGE_SVG_FONT_DIR') ?? '') || null,
+        maxQueue: Number(config.get('IMAGE_MAX_QUEUE')),
+        svgFontDir: resolveFontDir(
+          String(config.get('IMAGE_SVG_FONT_DIR') ?? ''),
+        ),
+        svgLoadSystemFonts:
+          String(config.get('IMAGE_SVG_LOAD_SYSTEM_FONTS')) === 'true',
+        svgDefaultFontFamily: String(
+          config.get('IMAGE_SVG_DEFAULT_FONT_FAMILY'),
+        ),
       }),
     },
   ],
   exports: [ImageFormatRegistryService, IMAGE_CONVERSION_LIMITS],
 })
 export class ImageConversionModule {}
+
+const FONT_FILE = /\.(?:ttf|otf|ttc)$/i;
+
+/**
+ * The font directory as an absolute path, or `null` for none.
+ *
+ * A configured directory with no font in it is a deployment mistake that
+ * would otherwise show up as every SVG's text silently missing, so it is
+ * logged at startup rather than discovered from a user's broken image.
+ */
+function resolveFontDir(configured: string): string | null {
+  if (configured === '') {
+    return null;
+  }
+
+  const dir = resolve(configured);
+  const fonts = existsSync(dir)
+    ? readdirSync(dir).filter((name) => FONT_FILE.test(name))
+    : [];
+
+  if (fonts.length === 0) {
+    new Logger(ImageConversionModule.name).warn(
+      `IMAGE_SVG_FONT_DIR (${dir}) contains no fonts: SVG <text> will not render`,
+    );
+  }
+
+  return dir;
+}

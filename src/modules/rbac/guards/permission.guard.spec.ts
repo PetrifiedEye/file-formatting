@@ -11,7 +11,7 @@ import {
   RbacAuditEventType,
   RbacAuditOutcome,
 } from '../entities/rbac-audit-event.entity';
-import { RbacAuditService } from '../rbac-audit.service';
+import { RbacAuditService } from '@/modules/rbac/audit/rbac-audit.service';
 import { PermissionGuard, RequestUser } from './permission.guard';
 
 describe('PermissionGuard', () => {

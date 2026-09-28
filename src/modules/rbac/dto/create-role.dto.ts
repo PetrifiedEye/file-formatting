@@ -1,16 +1,18 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import Joi from 'joi';
 
+import { JoiSchema } from '@/core/validation/joi-schema.decorator';
+
+const createRoleDtoSchema = Joi.object<CreateRoleDto>({
+  name: Joi.string().min(1).max(100).required(),
+  description: Joi.string().allow('').max(500),
+});
+
+@JoiSchema(createRoleDtoSchema)
 export class CreateRoleDto {
   @ApiProperty({ minLength: 1, maxLength: 100, example: 'editor' })
-  @IsString()
-  @MinLength(1)
-  @MaxLength(100)
   name!: string;
 
   @ApiPropertyOptional({ maxLength: 500 })
-  @IsOptional()
-  @IsString()
-  @MaxLength(500)
   description?: string;
 }

@@ -52,14 +52,13 @@
     "@resvg/resvg-js": "^2.6.2",
     "@types/nodemailer": "^8.0.1",
     "bcryptjs": "^3.0.3",
-    "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.3",
     "csv-parse": "^7.0.2",
     "csv-stringify": "^6.8.3",
     "fast-xml-parser": "^5.11.1",
     "joi": "^18.0.2",
     "nodemailer": "^9.1.0",
     "pg": "^8.20.0",
+    "piscina": "^5.3.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "reflect-metadata": "^0.2.2",
@@ -110,12 +109,27 @@
       "^.+\\.(t|j)sx?$": "ts-jest"
     },
     "collectCoverageFrom": [
-      "**/*.(t|j)s"
+      "**/*.(t|j)s",
+      "!main.ts",
+      "!database/**",
+      "!**/*.module.ts",
+      "!**/entities/**",
+      "!**/*.dto.ts",
+      "!**/*test-support.ts",
+      "!**/*.spec.ts"
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",
     "moduleNameMapper": {
       "^@/(.*)$": "<rootDir>/$1"
+    },
+    "coverageThreshold": {
+      "global": {
+        "statements": 90,
+        "branches": 78,
+        "functions": 90,
+        "lines": 90
+      }
     }
   }
 }

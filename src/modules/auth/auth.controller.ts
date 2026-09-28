@@ -30,7 +30,7 @@ import { ConfigService } from '@/core/config/config.service';
 import { AuthService, IssuedTokens } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import type { RequestUser } from './guards/jwt-auth.guard';
-import { PasswordResetService } from './password-reset.service';
+import { PasswordResetService } from '@/modules/auth/password-reset/password-reset.service';
 import { RegisterRequestDto } from './dto/register-request.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
 import { ConfirmCodeRequestDto } from './dto/confirm-code-request.dto';

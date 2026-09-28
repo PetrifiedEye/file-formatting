@@ -1,7 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import Joi from 'joi';
 
 import { ConversionFormat } from '../conversion.enums';
+
+import { JoiSchema } from '@/core/validation/joi-schema.decorator';
+import { multipartFlagField } from '@/core/validation/joi-fields';
+
+/**
+ * Validated by hand against the multipart fields: the global pipe never sees
+ * a multipart body.
+ */
+export const convertRequestDtoSchema = Joi.object<ConvertRequestDto>({
+  targetFormat: Joi.string()
+    .valid(...Object.values(ConversionFormat))
+    .required(),
+  store: multipartFlagField(),
+});
 
 /**
  * The non-file parts of a conversion request.
@@ -13,13 +27,12 @@ import { ConversionFormat } from '../conversion.enums';
  *
  * Both fields arrive as strings — multipart has no other type.
  */
+@JoiSchema(convertRequestDtoSchema)
 export class ConvertRequestDto {
   @ApiProperty({
     enum: ConversionFormat,
     description: 'The format to convert into. Must differ from the source.',
   })
-  @IsString()
-  @IsIn(Object.values(ConversionFormat))
   targetFormat!: ConversionFormat;
 
   @ApiPropertyOptional({
@@ -27,7 +40,5 @@ export class ConvertRequestDto {
     default: 'false',
     description: 'Keep the converted file in application storage.',
   })
-  @IsOptional()
-  @IsIn(['true', 'false'])
   store?: 'true' | 'false';
 }

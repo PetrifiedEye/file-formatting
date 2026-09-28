@@ -16,6 +16,7 @@ const DOCUMENTED: [string, HttpStatus, ConversionErrorCategory][] = [
   ['missing_target_format', 400, ConversionErrorCategory.BAD_REQUEST],
   ['same_format', 400, ConversionErrorCategory.BAD_REQUEST],
   ['invalid_store_flag', 400, ConversionErrorCategory.BAD_REQUEST],
+  ['invalid_background_color', 400, ConversionErrorCategory.BAD_REQUEST],
   ['invalid_encoding', 400, ConversionErrorCategory.PARSE_ERROR],
   ['parse_error', 400, ConversionErrorCategory.PARSE_ERROR],
   ['csv_duplicate_header', 400, ConversionErrorCategory.PARSE_ERROR],
@@ -32,7 +33,9 @@ const DOCUMENTED: [string, HttpStatus, ConversionErrorCategory][] = [
     ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED,
   ],
   ['output_too_large', 400, ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED],
+  ['xml_unrepresentable', 400, ConversionErrorCategory.BAD_REQUEST],
   ['timeout', 400, ConversionErrorCategory.TIMEOUT],
+  ['service_busy', 503, ConversionErrorCategory.SERVICE_BUSY],
   ['input_too_large', 413, ConversionErrorCategory.PAYLOAD_TOO_LARGE],
   [
     'unsupported_source_format',

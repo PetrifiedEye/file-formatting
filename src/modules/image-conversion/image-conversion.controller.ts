@@ -16,6 +16,7 @@ import {
   ApiOperation,
   ApiPayloadTooLargeResponse,
   ApiResponse,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
@@ -33,6 +34,7 @@ import {
   ConversionRetentionOutcome,
 } from '@/modules/conversion/conversion.enums';
 import { ConversionErrorResponseDto } from '@/modules/conversion/dto/conversion-error-response.dto';
+import { MultipartUpload } from '@/modules/conversion/upload/multipart-upload';
 
 import { SupportedImageFormatsResponseDto } from './dto/supported-image-formats-response.dto';
 import {
@@ -42,8 +44,9 @@ import {
 import { ImageConversionService } from './image-conversion.service';
 import type {
   ImageConversionResult,
-  MultipartSource,
+  ImageUpload,
 } from './image-conversion.service';
+import { ImageUploadPipe } from './image-upload.pipe';
 
 interface RequestWithUser extends FastifyRequest {
   user: RequestUser;
@@ -137,6 +140,14 @@ export class ImageConversionController {
           default: 'false',
           description: 'Keep the result in application storage.',
         },
+        backgroundColor: {
+          type: 'string',
+          pattern: '^(transparent|#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?)$',
+          default: 'transparent',
+          description:
+            'What transparent pixels are composited onto. JPEG, which ' +
+            'cannot be transparent, gets the colour over white.',
+        },
       },
     },
   })
@@ -188,6 +199,12 @@ export class ImageConversionController {
     type: ConversionErrorResponseDto,
   })
   @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  @ApiServiceUnavailableResponse({
+    description:
+      'Too many conversions are already running or waiting; retry shortly ' +
+      '(`service_busy`).',
+    type: ConversionErrorResponseDto,
+  })
   @ApiResponse({
     status: HttpStatus.INTERNAL_SERVER_ERROR,
     description: 'Unexpected failure.',
@@ -195,12 +212,10 @@ export class ImageConversionController {
   })
   async convert(
     @Req() request: RequestWithUser,
+    @MultipartUpload(ImageUploadPipe) upload: ImageUpload,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    const result = await this.images.execute(
-      request.user.id,
-      request as unknown as MultipartSource,
-    );
+    const result = await this.images.execute(request.user.id, upload);
 
     this.send(reply, result);
   }

@@ -39,14 +39,26 @@ const URL_ATTRIBUTES = new Set([
  * invisible to `fast-xml-parser` *and* invisible to a literal substring scan
  * *and* meaningful to resvg.
  */
-const RAW_PATTERNS: { pattern: RegExp; code: RefusalCode }[] = [
+const RAW_PATTERNS: {
+  pattern: RegExp;
+  code: RefusalCode;
+  /** Scan the markup only, with text content removed. */
+  markupOnly?: boolean;
+}[] = [
   // A DOCTYPE is what closes billion-laughs: no entity expansion is ever
   // performed, so there is no expansion budget to tune and no bomb to survive.
   { pattern: /<!DOCTYPE/i, code: ConversionErrorCode.XML_DOCTYPE_FORBIDDEN },
   { pattern: /<!ENTITY/i, code: ConversionErrorCode.XML_DOCTYPE_FORBIDDEN },
   { pattern: /<script/i, code: ConversionErrorCode.SVG_ACTIVE_CONTENT },
   { pattern: /javascript:/i, code: ConversionErrorCode.SVG_ACTIVE_CONTENT },
-  { pattern: /\son[a-z-]+\s*=/i, code: ConversionErrorCode.SVG_ACTIVE_CONTENT },
+  // Markup only: an event handler is an attribute, and `<text>` saying
+  // "someone = …" is a drawing, not a handler (it used to refuse the whole
+  // SVG). The structured walk refuses every `on*` attribute regardless.
+  {
+    pattern: /\son[a-z-]+\s*=/i,
+    code: ConversionErrorCode.SVG_ACTIVE_CONTENT,
+    markupOnly: true,
+  },
   { pattern: /@import/i, code: ConversionErrorCode.SVG_EXTERNAL_REFERENCE },
 ];
 
@@ -92,9 +104,10 @@ export interface ValidatedSvg {
  */
 export function validateSvg(input: Buffer): ValidatedSvg {
   const text = decodeUtf8(input);
+  const markup = withoutTextContent(text);
 
-  for (const { pattern, code } of RAW_PATTERNS) {
-    if (pattern.test(text)) {
+  for (const { pattern, code, markupOnly } of RAW_PATTERNS) {
+    if (pattern.test(markupOnly ? markup : text)) {
       throw new ConversionException(code);
     }
   }
@@ -116,6 +129,15 @@ export function validateSvg(input: Buffer): ValidatedSvg {
   }
 
   return { text, attributes: root };
+}
+
+/**
+ * The document with the character data between tags removed, so a scan for
+ * attribute syntax is not tripped by text that merely looks like it. Anything
+ * inside a tag — and inside a comment, conservatively — is kept.
+ */
+function withoutTextContent(text: string): string {
+  return text.replace(/>[^<]*</g, '><');
 }
 
 /** Round-trip check: anything that does not survive was not valid UTF-8. */

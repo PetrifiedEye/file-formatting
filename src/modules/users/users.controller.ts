@@ -38,11 +38,11 @@ import {
 } from '@/modules/auth/guards/jwt-auth.guard';
 import { AccessConfigService } from '@/modules/rbac/access-config.service';
 
-import { AccountDeletionAuditService } from './account-deletion-audit.service';
+import { AccountDeletionAuditService } from '@/modules/users/account-deletion/account-deletion-audit.service';
 import {
   AccountDeletionService,
   AdminDeleteResult,
-} from './account-deletion.service';
+} from '@/modules/users/account-deletion/account-deletion.service';
 import { AdminUpdateEmailDto } from './dto/admin-update-email.dto';
 import { ConfirmAccountDeletionDto } from './dto/confirm-account-deletion.dto';
 import { ConfirmEmailChangeDto } from './dto/confirm-email-change.dto';
@@ -50,7 +50,7 @@ import { InitiateEmailChangeDto } from './dto/initiate-email-change.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { UserDirectoryPageDto } from './dto/user-directory-page.dto';
 import { UserProfileResponseDto } from './dto/user-profile-response.dto';
-import { EmailChangeService } from './email-change.service';
+import { EmailChangeService } from '@/modules/users/email-change/email-change.service';
 import {
   AccountDeletionAuditAction,
   AccountDeletionAuditOutcome,
@@ -61,9 +61,9 @@ import {
   ProfileAuditOutcome,
 } from './entities/profile-audit-event.entity';
 import { User } from './entities/user.entity';
-import { ProfileAuditService } from './profile-audit.service';
-import { UserDirectoryAuditService } from './user-directory-audit.service';
-import { UserDirectoryService } from './user-directory.service';
+import { ProfileAuditService } from '@/modules/users/profile/profile-audit.service';
+import { UserDirectoryAuditService } from '@/modules/users/directory/user-directory-audit.service';
+import { UserDirectoryService } from '@/modules/users/directory/user-directory.service';
 import { UsersService } from './users.service';
 
 interface RequestWithUser extends FastifyRequest {

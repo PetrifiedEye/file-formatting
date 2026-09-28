@@ -6,16 +6,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { isUUID } from 'class-validator';
 import { LessThan, Repository } from 'typeorm';
 
 import { ConfigService } from '@/core/config/config.service';
+import { isUuid } from '@/core/validation/joi-fields';
 import { LocalFileStorageService } from '@/core/storage/local-file-storage.service';
 
 import { UserProfileResponseDto } from './dto/user-profile-response.dto';
 import { UserProfileAuditOutcome } from './entities/user-profile-audit-event.entity';
 import { User, UserStatus } from './entities/user.entity';
-import { UsersAuditService } from './users-audit.service';
+import { UsersAuditService } from '@/modules/users/profile/users-audit.service';
 import { detectImageExtension } from './utils/image-type';
 import type { RequestUser } from '@/modules/auth/guards/jwt-auth.guard';
 import {
@@ -46,7 +46,7 @@ export class UsersService {
   async updatePhoto(targetId: string, fileBuffer: Buffer): Promise<User> {
     // A malformed id is "not found", not a 500 from Postgres rejecting the
     // uuid cast — the same contract `getProfileFor` applies.
-    const user = isUUID(targetId)
+    const user = isUuid(targetId)
       ? await this.usersRepository.findOne({ where: { id: targetId } })
       : null;
 
@@ -149,7 +149,7 @@ export class UsersService {
       throw new ForbiddenException('Insufficient permissions');
     }
 
-    const target = isUUID(targetId)
+    const target = isUuid(targetId)
       ? await this.usersRepository.findOne({ where: { id: targetId } })
       : null;
 

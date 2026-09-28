@@ -34,9 +34,10 @@ both `decode` and `encode`; SVG implements only `decode`. That is why
    decoded and normalised to 8-bit RGB/RGBA — **not refused**.
 2. Apply EXIF orientation, if present, to the pixels.
 3. Convert to sRGB. A source colour profile is not carried into the result.
-4. If the image has an alpha channel, **composite it onto
-   `IMAGE_BACKGROUND_COLOR`** (default `#ffffff`). The result is fully
-   opaque (FR-009, SC-003).
+4. If the image has an alpha channel, **composite it onto the request's
+   `backgroundColor`** (default `IMAGE_BACKGROUND_COLOR`, `transparent`),
+   itself composited onto white — so the default result is white where the
+   source was transparent. The result is fully opaque (FR-009, SC-003).
 5. Encode at `IMAGE_JPEG_QUALITY` (default 85), a fixed default that is never
    caller-supplied.
 
@@ -60,15 +61,23 @@ from the JPEG losses already baked into the source.
 2. Resolve the intrinsic size (§4). Refuse if it cannot be determined or
    exceeds the configured maximum — **before the renderer is constructed**
    (FR-018).
-3. Render at exactly that size (`fitTo: original` — no scaling), over
-   `IMAGE_BACKGROUND_COLOR`.
-4. Encode as PNG, preserving alpha where the drawing is transparent above the
-   background.
+3. Render at exactly that size (`fitTo: original` — no scaling), onto a
+   **transparent** canvas, with the bundled fonts (`IMAGE_SVG_FONT_DIR`) and
+   `IMAGE_SVG_DEFAULT_FONT_FAMILY` as the fallback for any family not
+   installed.
+4. Encode as PNG over the request's `backgroundColor` (default
+   `IMAGE_BACKGROUND_COLOR`, itself `transparent`): transparent areas stay
+   transparent by default.
+
+> Revised 2026-09-28 (code review): the drawing used to be rendered over
+> `IMAGE_BACKGROUND_COLOR` (`#ffffff`), so SVG → PNG was never transparent, and
+> with no fonts configured `<text>` rendered as nothing.
 
 ## 4. SVG → JPEG
 
-As §3, then flatten onto the background and encode at `IMAGE_JPEG_QUALITY`.
-The result is fully opaque.
+As §3, then flatten onto the background — composited onto white first, since
+JPEG has no alpha, so the default `transparent` gives white — and encode at
+`IMAGE_JPEG_QUALITY`. The result is fully opaque.
 
 ---
 

@@ -2,8 +2,8 @@ import { Readable } from 'stream';
 
 import { ImageFormat } from '@/modules/conversion/conversion.enums';
 import { ConversionRetentionOutcome } from '@/modules/conversion/conversion.enums';
-import { ConversionHistoryService } from '@/modules/conversion/conversion-history.service';
-import { ConversionRetentionService } from '@/modules/conversion/conversion-retention.service';
+import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
+import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
 
 import { JpegHandler } from './formats/jpeg.handler';
 import { PngHandler } from './formats/png.handler';
@@ -13,13 +13,16 @@ import type {
   ImageConversionLimits,
   ImageFormatHandler,
 } from './formats/image-format-handler';
-import { ImageConversionService } from './image-conversion.service';
 import type {
   MultipartPart,
   MultipartSource,
-} from './image-conversion.service';
-import { ImageFormatDetectorService } from './image-format-detector.service';
-import { ImageFormatRegistryService } from './image-format-registry.service';
+} from '@/modules/conversion/upload/multipart-upload';
+
+import { ImageConversionService } from './image-conversion.service';
+import type { ImageConversionResult } from './image-conversion.service';
+import { ImageUploadPipe } from './image-upload.pipe';
+import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
+import { ImageFormatRegistryService } from '@/modules/image-conversion/detection/image-format-registry.service';
 
 /**
  * A wired-up service over the real handlers, with history and retention
@@ -32,6 +35,12 @@ import { ImageFormatRegistryService } from './image-format-registry.service';
  */
 export interface ServiceHarness {
   service: ImageConversionService;
+  pipe: ImageUploadPipe;
+  /** What a request goes through: the upload pipe, then the service. */
+  execute(
+    userId: string,
+    request: MultipartSource,
+  ): Promise<ImageConversionResult>;
   history: { record: jest.Mock };
   retention: {
     finalize: jest.Mock;
@@ -76,7 +85,17 @@ export function buildService(
     limits,
   );
 
-  return { service, history, retention, limits };
+  const pipe = new ImageUploadPipe(service, registry);
+
+  return {
+    service,
+    pipe,
+    execute: async (userId, request) =>
+      service.execute(userId, await pipe.transform(request)),
+    history,
+    retention,
+    limits,
+  };
 }
 
 export interface RequestSpec {

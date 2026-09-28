@@ -1,14 +1,6 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import fastifyCookie from '@fastify/cookie';
-import fastifyMultipart from '@fastify/multipart';
-import fastifyStatic from '@fastify/static';
-import { resolve } from 'path';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
@@ -19,7 +11,6 @@ import {
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 
 import { AppModule } from '../src/core/app/app.module';
-import { ConfigService } from '../src/core/config/config.service';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
 import { AccessConfigService } from '../src/modules/rbac/access-config.service';
 import { Grant } from '../src/modules/rbac/entities/grant.entity';
@@ -28,6 +19,7 @@ import { Role } from '../src/modules/rbac/entities/role.entity';
 import { UserRole } from '../src/modules/rbac/entities/user-role.entity';
 import { UserDirectoryAuditEvent } from '../src/modules/users/entities/user-directory-audit-event.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
+import { createTestApp } from './support/create-test-app';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 
@@ -41,6 +33,7 @@ interface DirectoryPageBody {
     lastLoginAt: string | null;
   }[];
   nextCursor: string | null;
+  total: number;
 }
 
 function extractSessionCookie(setCookieHeader: string[] | undefined): string {
@@ -64,7 +57,6 @@ describe('Admin User Directory (e2e)', () => {
   let auditRepository: Repository<UserDirectoryAuditEvent>;
   let accessConfigService: AccessConfigService;
   let throttlerStorage: ThrottlerStorageService;
-  let configService: ConfigService;
 
   let adminUser: User;
   let readerUser: User;
@@ -78,45 +70,7 @@ describe('Admin User Directory (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-
-    configService = moduleFixture.get(ConfigService);
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, {
-        secret: configService.get('COOKIE_SECRET'),
-      });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyMultipart, {
-        limits: {
-          fileSize: Number(configService.get('PHOTO_MAX_SIZE_BYTES')),
-          files: 1,
-        },
-      });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyStatic, {
-        root: resolve(configService.get('ASSETS_DIR')),
-        prefix: '/assets/',
-      });
-
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -328,6 +282,11 @@ describe('Admin User Directory (e2e)', () => {
       expect(secondIdsA).toEqual(secondIdsB);
       expect(firstIds.some((id) => secondIdsA.includes(id))).toBe(false);
       expect(secondPageA.nextCursor).toBeNull();
+
+      // The total spans every page, so it is the same on both, and it is
+      // exactly the number of items the pages add up to.
+      expect(firstPage.total).toBe(firstIds.length + secondIdsA.length);
+      expect(secondPageA.total).toBe(firstPage.total);
     });
 
     it('returns nextCursor null on the first call when total users are within the limit', async () => {
@@ -383,6 +342,7 @@ describe('Admin User Directory (e2e)', () => {
 
       const body = response.body as DirectoryPageBody;
       expect(body.items.map((i) => i.id)).toEqual([alice.id]);
+      expect(body.total).toBe(1);
     });
 
     it('matches by exact account id', async () => {

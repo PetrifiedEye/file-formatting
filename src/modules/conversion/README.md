@@ -16,7 +16,10 @@ pins it.
 
 ```ts
 type DocumentNode =
-  | null | boolean | number | string
+  | null
+  | boolean
+  | number
+  | string
   | DocumentNode[]
   | { [key: string]: DocumentNode };
 ```
@@ -85,7 +88,7 @@ Cid,41,extra
    FR-009 forbids silently dropping data.
 
 ```json
-[ { "id": 1, "user": { "name": "Ann" }, "tags": ["a", "b"] } ]
+[{ "id": 1, "user": { "name": "Ann" }, "tags": ["a", "b"] }]
 ```
 
 ```csv
@@ -114,9 +117,30 @@ nobody expects `CSV → JSON → CSV → JSON` to restore a `null`.
    - otherwise an **object**: child elements under their names, attributes
      under `@_<name>`, and any non-whitespace text under `#text`.
 5. **Repeated sibling elements** of the same name become an **array**, in
-   document order. A name appearing once is *not* wrapped in an array.
+   document order. A name appearing once is _not_ wrapped in an array.
 6. An empty element (`<a/>` or `<a></a>`) becomes `""`.
-7. Leaf values stay strings — no type inference, for the reason in §1.
+7. Leaf values stay strings — no type inference: `007`, `1e3` and `true` are
+   as likely to be identifiers as numbers, and guessing would corrupt them.
+8. **Type hints.** When the document element declares
+   `xmlns:ff="urn:file-formatting:xml-types"` — which this service's own
+   output does whenever it needs to (§4.9) — the hints are applied and then
+   removed:
+   - `ff:type="number" | "boolean"` → the text as that type (text that does not
+     fit → `400 parse_error`); `"null"` → `null`; `"object"` → `{}`;
+     `"array"` → a list of the element's `<item>` children (`[]` if none);
+   - `ff:array="true"` → the element is a one-item list;
+   - `ff:wrapped="true"` on the document element → it was invented to hold the
+     document (§4.2), so its value is the whole document.
+
+   Without the namespace declaration, `ff:*` attributes are ordinary
+   attributes: someone else's `ff:` prefix, or a hint typed by hand, changes
+   nothing.
+
+9. The predefined entities (`&lt;` `&gt;` `&amp;` `&quot;` `&apos;`) and
+   character references (`&#10;`, `&#x41;`) are decoded — in one pass, so
+   `&amp;lt;` is the text `&lt;`. A reference to a non-character (`&#1;`) →
+   `400 parse_error`. No other entity exists: a DOCTYPE is refused (rule 1).
+10. Leading and trailing whitespace of a text value is trimmed.
 
 ```xml
 <order id="7"><item>pen</item><item>ink</item><note>urgent</note></order>
@@ -126,11 +150,12 @@ nobody expects `CSV → JSON → CSV → JSON` to restore a `null`.
 { "order": { "@_id": "7", "item": ["pen", "ink"], "note": "urgent" } }
 ```
 
-**The single-vs-repeated asymmetry is real and deliberate**: a one-item list
-in XML is indistinguishable from a scalar, so `XML → JSON` cannot know it
-was a list. Wrapping every element in an array instead would be equally
-deterministic but would make the common case unusable. The rule is tested
-both ways.
+**The single-vs-repeated asymmetry is real, for XML without hints**: a
+one-item list in plain XML is indistinguishable from a scalar, so `XML → JSON`
+cannot know it was a list. Wrapping every element in an array instead would be
+equally deterministic but would make the common case unusable. This service's
+own output marks one-item lists (§4.9), so its XML reads back exactly. Both
+behaviours are tested.
 
 ## 4. Model → XML
 
@@ -145,9 +170,17 @@ both ways.
    other key becomes a **child element**.
 5. An array value emits its owning key as a **repeated sibling element**,
    once per item — the inverse of §3.5.
-6. Scalars become text (`true`/`false` and JSON number formatting). `null`
-   becomes an **empty element**.
-7. `&`, `<`, `>` are escaped in text; `&`, `<`, `>`, `"` in attribute values.
+6. Scalars become text (`true`/`false` and JSON number formatting); numbers
+   and booleans carry `ff:type` (§4.9). `null` becomes an **empty element**
+   marked `ff:type="null"` — distinct from `""`, which is an unmarked empty
+   element.
+7. `&`, `<`, `>` are escaped in text, and CR as `&#13;`; attribute values also
+   escape `"`, TAB, LF and CR (`&#9;` `&#10;` `&#13;`), which attribute-value
+   normalization would otherwise turn into spaces. A character XML 1.0 cannot
+   carry at all — a C0 control other than TAB/LF/CR (a NUL from JSON, say),
+   U+FFFE/U+FFFF, an unpaired surrogate — → `400 xml_unrepresentable`, as is a
+   list or object under an `@_` or `#text` key: refused, never dropped or
+   stringified.
 8. **Name sanitization**: a key that is not a valid XML Name has each invalid
    character replaced by `_`, and gains a leading `_` if it starts with a
    character that cannot begin a Name. If sanitization makes two sibling keys
@@ -162,20 +195,31 @@ explanation, not dropped.
 `first-name` stays `first-name`. (The spec's illustration of this rule uses
 `user-name`; that particular pair does not actually collide.)
 
+9. **Type hints**, in the namespace `urn:file-formatting:xml-types` (prefix
+   `ff`), declared once on the document element and only when needed — a
+   document of plain strings (anything from CSV) carries none:
+   - `ff:type` on a number, boolean, `null`, `{}` or a list that is itself a
+     value (the document, an empty list, a list inside a list — written as an
+     element whose `<item>` children are its items);
+   - `ff:array="true"` on the single element of a one-item list;
+   - `ff:wrapped="true"` on an invented `<root>`.
+
+   Attribute values are written as text and read back as strings.
+
 ```json
 { "items": [1, 2], "meta": null }
 ```
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<root><items>1</items><items>2</items><meta/></root>
+<root xmlns:ff="urn:file-formatting:xml-types" ff:wrapped="true"><items ff:type="number">1</items><items ff:type="number">2</items><meta ff:type="null"/></root>
 ```
 
-(The root has two keys, so `<root>` wraps it — rule 2.)
+(The root has two keys, so a marked `<root>` wraps it — rule 2.)
 
 ## 5. JSON → model, model → JSON
 
-Identity in both directions; the model *is* the JSON data model (RFC 8259).
+Identity in both directions; the model _is_ the JSON data model (RFC 8259).
 Output is UTF-8, two-space indented, with a trailing newline. Duplicate keys
 in the input resolve last-wins, as `JSON.parse` does.
 
@@ -212,16 +256,18 @@ only where required for unambiguous re-parsing.
 
 ## Round-trip guarantees
 
-| Round trip | Guarantee |
-|---|---|
-| `CSV → JSON → CSV` | Exact, for rectangular input with a valid header. |
-| `CSV → YAML → CSV` | Exact, same conditions. |
-| `JSON → YAML → JSON` | Exact for core-schema-expressible values. |
-| `JSON → XML → JSON` | Types become strings, single-item arrays become scalars. Documented, not a bug. |
-| `X → CSV → X` | Lossy wherever CSV cannot carry the shape: `null` vs `""`, numbers vs strings, nesting vs flattened paths. |
+| Round trip           | Guarantee                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `CSV → JSON → CSV`   | Exact, for rectangular input with a valid header.                                                          |
+| `CSV → YAML → CSV`   | Exact, same conditions.                                                                                    |
+| `JSON → YAML → JSON` | Exact for core-schema-expressible values.                                                                  |
+| `JSON → XML → JSON`  | Exact, via the type hints (§4.9) — except attribute (`@_`) values, which come back as strings.             |
+| `X → CSV → X`        | Lossy wherever CSV cannot carry the shape: `null` vs `""`, numbers vs strings, nesting vs flattened paths. |
 
 SC-001 is measured against the first three rows.
 
+`XML → JSON` of XML this service did not write keeps its limits: leaves are
+strings and a single element is not a list (§3.5, §3.7).
 
 ---
 
@@ -242,7 +288,7 @@ The source format is decided by content; the file name is a secondary hint
   truncated `data.json`, and likewise for a `.yaml` file whose aliases blow the
   expansion cap. If the name claimed nothing (or named a format that never even
   sniffed), the answer is `415 unsupported_source_format`: we genuinely could
-  not tell what it was. This only decides what is *reported*; it never changes
+  not tell what it was. This only decides what is _reported_; it never changes
   a detection that succeeded.
 - The file name only ever **widens** what a handler will consider, never
   narrows it, and never reorders the scan. A `.csv` file holding JSON is
@@ -270,9 +316,60 @@ plus the applicable limit, never the file.
 why a 413's row shows the point at which the budget was exceeded rather than
 the size of the file the caller tried to send.
 
+Where each limit is applied: the most-permissive-candidate budget while the
+request body is read (`DocumentUploadPipe`), the detected format's own budget
+in the conversion, once detection has settled the format. A request both over
+its detected format's budget _and_ missing `targetFormat` is therefore answered
+400 unless it is also over every candidate's budget, in which case the read
+itself stops it with 413.
+
+## Worker threads, the deadline and the concurrency bound
+
+Detection, parsing, the structural guard and serialization run on a worker
+thread (`pipeline/`, via Piscina), not on the event loop:
+
+- a 5 MiB `JSON.parse` no longer delays every unrelated request while it runs
+  (SC-008: ten concurrent 1 MiB conversions leave `/health` within ~10 ms);
+- the deadline (`CONVERSION_TIMEOUT_MS`) can stop a parse already in
+  progress — aborting the task stops its worker — instead of only being
+  checked between stages.
+
+Detection's confirming parse is the parse: its model is converted directly, so
+a document is parsed once, and that happens under the deadline and the
+concurrency bound rather than before either applies.
+
+A `ConcurrencyLimiter` admits `CONVERSION_MAX_CONCURRENT` conversions at once
+(one worker thread each), queues up to `CONVERSION_MAX_QUEUE` more — a waiter
+whose deadline passes leaves the queue at once — and refuses the rest with 503
+`service_busy`, recorded in history like any other refusal.
+`CONVERSION_USE_WORKER_THREADS=false` runs the same pipeline on the main thread
+as an escape hatch.
+
+The worker builds its registry from `formats/format-handlers.ts`, the same
+list the module registers, so the formats advertised and the formats converted
+cannot drift apart.
+
+## Reading the request
+
+`POST /api/convert` and `POST /api/images/convert` read their multipart body in
+a pipe, not in the controller or the service: `@MultipartUpload(DocumentUploadPipe)`
+and `@MultipartUpload(ImageUploadPipe)`. Both extend `upload/MultipartUploadPipe`,
+which owns what the two routes share — exactly one `file` part, `targetFormat`
+and `store` in any order, drain-before-refuse, Joi validation of the fields and
+their error codes, and the translation of `@fastify/multipart`'s own limits
+(`FST_FILES_LIMIT`, `FST_REQ_FILE_TOO_LARGE`, `FST_PARTS_LIMIT`) into
+`input_too_large`. Each subclass supplies only how its file is consumed, which
+still happens while the stream is open (see below).
+
+A refusal in the pipe is **returned, not thrown**: `CollectedUpload` carries
+the failure together with what was learned before it (file name, bytes read,
+`store`, source format). The service raises it from inside `execute`, so a
+refused request gets its history row and log line exactly like a failed
+conversion, and the attempt's clock starts when the pipe began reading.
+
 ## Adding a fifth format (SC-009)
 
-Adding TOML is one new file and one provider entry. Nothing below is edited:
+Adding TOML is one new file and one list entry. Nothing below is edited:
 no existing handler, `conversion.controller.ts`, any DTO, or the discovery
 endpoint — and the eight new directions appear in `GET /api/convert/formats`
 on their own, because that list is derived from the registry rather than
@@ -293,16 +390,23 @@ written down (FR-029, FR-030).
      readonly detectionPriority = 35; // between YAML and CSV
      readonly sniffIsConclusive = false;
 
-     sniff(prefix: string, namedByFileName: boolean): boolean { /* … */ }
+     sniff(prefix: string, namedByFileName: boolean): boolean {
+       /* … */
+     }
 
-     async read(input: string): Promise<DocumentNode> { /* … */ }
+     async read(input: string): Promise<DocumentNode> {
+       /* … */
+     }
 
-     async write(node: DocumentNode): Promise<Buffer> { /* … */ }
+     async write(node: DocumentNode): Promise<Buffer> {
+       /* … */
+     }
    }
    ```
 
-3. Add it to `conversion.module.ts` — as a provider, and in the
-   `FORMAT_HANDLERS` factory's `inject` list.
+3. Add `new TomlHandler()` to `createFormatHandlers()` in
+   `formats/format-handlers.ts` — the one list both the module and the
+   conversion worker threads build their registry from.
 
 4. Add `CONVERSION_MAX_BYTES_TOML` to the config surface. Until it exists the
    registry falls back to the smallest configured limit, so the new format is

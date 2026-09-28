@@ -1,19 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  ArrayUnique,
-  IsArray,
-  IsOptional,
-  IsString,
-  IsUUID,
-} from 'class-validator';
+import Joi from 'joi';
 
+import { JoiSchema } from '@/core/validation/joi-schema.decorator';
+import { uuidField } from '@/core/validation/joi-fields';
+
+const createGrantDtoSchema = Joi.object<CreateGrantDto>({
+  roleId: uuidField().required(),
+  permissionId: uuidField().required(),
+  actions: Joi.array().items(Joi.string().allow('')).unique(),
+});
+
+@JoiSchema(createGrantDtoSchema)
 export class CreateGrantDto {
   @ApiProperty()
-  @IsUUID()
   roleId!: string;
 
   @ApiProperty()
-  @IsUUID()
   permissionId!: string;
 
   @ApiPropertyOptional({
@@ -22,9 +24,5 @@ export class CreateGrantDto {
       'Subset of the permission actions; must be non-empty (422). ' +
       'Omitting it on create records every action the permission has today.',
   })
-  @IsOptional()
-  @IsArray()
-  @ArrayUnique()
-  @IsString({ each: true })
   actions?: string[];
 }

@@ -4,7 +4,7 @@ import { ConversionErrorCode } from '@/modules/conversion/conversion.constants';
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 
 import type { ImageConversionContext } from './image-format-handler';
-import { createRasterImage, RasterImage } from './raster-image';
+import { createPipelineRasterImage, RasterImage } from './raster-image';
 
 /**
  * The decode both raster handlers share, and the pixel budget that guards it.
@@ -31,10 +31,16 @@ import { createRasterImage, RasterImage } from './raster-image';
  * first frame.
  */
 
+/** EXIF orientations 5–8 transpose the raster: width and height swap. */
+const TRANSPOSING_ORIENTATIONS = new Set([5, 6, 7, 8]);
+
 /** Read the declared size without allocating a pixel buffer. */
-export async function readHeader(
-  input: Buffer,
-): Promise<{ width: number; height: number; hasAlpha: boolean }> {
+export async function readHeader(input: Buffer): Promise<{
+  width: number;
+  height: number;
+  hasAlpha: boolean;
+  transposed: boolean;
+}> {
   let metadata: sharp.Metadata;
 
   try {
@@ -54,8 +60,14 @@ export async function readHeader(
   }
 
   // Orientations 5-8 transpose the raster. The pixel *count* is the same
-  // either way, which is all the budget cares about.
-  return { width, height, hasAlpha: metadata.hasAlpha === true };
+  // either way, which is all the budget cares about; the hub's dimensions
+  // are the upright ones.
+  return {
+    width,
+    height,
+    hasAlpha: metadata.hasAlpha === true,
+    transposed: TRANSPOSING_ORIENTATIONS.has(metadata.orientation ?? 1),
+  };
 }
 
 /** Refuse a declaration over the budget, before anything is allocated. */
@@ -75,6 +87,12 @@ export function enforcePixelBudget(
 /**
  * Decode `input` into the canonical hub.
  *
+ * Nothing is decoded yet: the hub carries the pipeline, and the pixels are
+ * produced — tile by tile, inside libvips — only while the target encodes
+ * them. A file whose header is fine but whose payload is not is therefore
+ * found out at encode time, and reported as `image_invalid` all the same
+ * (`decodesOnRead`).
+ *
  * `keepAlpha` is the one thing the two raster formats disagree about: a PNG's
  * transparency is carried into the hub, while a JPEG has none to carry and
  * must not have one invented.
@@ -89,44 +107,50 @@ export async function decodeRaster(
 
   const withAlpha = keepAlpha && header.hasAlpha;
 
-  let pipeline = sharp(input, {
-    limitInputPixels: context.limits.maxPixels,
-  })
-    .rotate()
-    .toColourspace('srgb');
-
-  pipeline = withAlpha ? pipeline.ensureAlpha() : pipeline.removeAlpha();
-
-  let decoded: { data: Buffer; info: sharp.OutputInfo };
-
-  try {
-    decoded = await pipeline
-      // `uchar` is what normalises a 16-bit-per-channel source to 8.
-      .raw({ depth: 'uchar' })
-      .toBuffer({ resolveWithObject: true });
-  } catch {
-    throw new ConversionException(ConversionErrorCode.IMAGE_INVALID);
-  }
-
-  return createRasterImage(
+  return createPipelineRasterImage(
     {
-      data: decoded.data,
-      width: decoded.info.width,
-      height: decoded.info.height,
-      channels: decoded.info.channels,
+      width: header.transposed ? header.height : header.width,
+      height: header.transposed ? header.width : header.height,
+      channels: withAlpha ? 4 : 3,
       hasAlpha: withAlpha,
+      decodesOnRead: true,
     },
     { maxPixels: context.limits.maxPixels },
+    () => {
+      const pipeline = sharp(input, {
+        // The second line of defence: a payload larger than its header.
+        limitInputPixels: context.limits.maxPixels,
+      })
+        .rotate()
+        // Also what normalises a 16-bit-per-channel source to 8, and a
+        // greyscale or indexed one to three colour channels (plus its alpha).
+        .toColourspace('srgb');
+
+      // Alpha is dropped only where the target format must not keep it.
+      // (Never `ensureAlpha()`: sharp applies it last, so it would put alpha
+      // back after a background had been flattened in.)
+      return header.hasAlpha && !withAlpha ? pipeline.removeAlpha() : pipeline;
+    },
   );
 }
 
-/** A sharp pipeline reading the hub back, ready to be encoded. */
-export function fromRaster(image: RasterImage): sharp.Sharp {
-  return sharp(image.data, {
-    raw: {
-      width: image.width,
-      height: image.height,
-      channels: image.channels,
-    },
-  });
+/**
+ * Run an encode, reporting a failure as the input's fault when producing the
+ * pixels still decodes the upload (a truncated payload behind a valid header)
+ * and as ours otherwise.
+ */
+export async function encodeRaster(
+  image: RasterImage,
+  encode: () => Promise<Buffer>,
+): Promise<Buffer> {
+  try {
+    return await encode();
+  } catch {
+    // Library messages quote the input; none of them escapes this call.
+    throw new ConversionException(
+      image.decodesOnRead
+        ? ConversionErrorCode.IMAGE_INVALID
+        : ConversionErrorCode.INTERNAL_ERROR,
+    );
+  }
 }

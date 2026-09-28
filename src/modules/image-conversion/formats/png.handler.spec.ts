@@ -1,6 +1,12 @@
 import sharp from 'sharp';
 
-import { expectRefusal, imageFixture, testContext } from './image-test-support';
+import {
+  expectRefusal,
+  imageFixture,
+  pixelAt,
+  pixelsOf,
+  testContext,
+} from './image-test-support';
 import { PngHandler } from './png.handler';
 
 describe('PngHandler', () => {
@@ -28,7 +34,7 @@ describe('PngHandler', () => {
       expect(image.height).toBe(48);
       expect(image.channels).toBe(4);
       expect(image.hasAlpha).toBe(true);
-      expect(image.data).toHaveLength(64 * 48 * 4);
+      expect(await pixelsOf(image)).toHaveLength(64 * 48 * 4);
     });
 
     /**
@@ -45,9 +51,13 @@ describe('PngHandler', () => {
       expect(image.width).toBe(width);
       expect(image.height).toBe(height);
       expect([3, 4]).toContain(image.channels);
-      expect(image.data).toHaveLength(width * height * image.channels);
+      expect(await pixelsOf(image)).toHaveLength(
+        width * height * image.channels,
+      );
       // 8 bits per channel: one byte per channel per pixel, nothing wider.
-      expect(image.data.length / (width * height)).toBe(image.channels);
+      expect((await pixelsOf(image)).length / (width * height)).toBe(
+        image.channels,
+      );
     });
 
     it('keeps the alpha channel of a transparent PNG', async () => {
@@ -58,12 +68,22 @@ describe('PngHandler', () => {
 
       expect(image.hasAlpha).toBe(true);
       expect(image.channels).toBe(4);
-      expect(image.data[3]).toBe(128);
+      expect((await pixelsOf(image))[3]).toBe(128);
     });
 
     it('surfaces a truncated file as image_invalid', async () => {
+      // The header is intact, so decoding succeeds: the pixels are only read
+      // while encoding, and a payload cut short is reported then — as the
+      // input's fault, not an internal error.
+      const context = testContext();
+      const decoded = await handler.decode(
+        imageFixture('truncated.png'),
+        context,
+      );
+
+      expect(decoded.decodesOnRead).toBe(true);
       await expectRefusal(
-        () => handler.decode(imageFixture('truncated.png'), testContext()),
+        () => handler.encode(decoded, context),
         'image_invalid',
       );
     });
@@ -114,11 +134,14 @@ describe('PngHandler', () => {
         testContext(),
       );
 
+      // Geometry, and a way to produce the pixels: nowhere for EXIF, GPS or
+      // a colour profile to sit.
       expect(Object.keys(image).sort()).toEqual([
         'channels',
-        'data',
+        'decodesOnRead',
         'hasAlpha',
         'height',
+        'toSharp',
         'width',
       ]);
     });
@@ -163,6 +186,69 @@ describe('PngHandler', () => {
       expect(metadata.exif).toBeUndefined();
       expect(metadata.icc).toBeUndefined();
       expect(metadata.orientation).toBeUndefined();
+    });
+
+    describe('the background (backgroundColor)', () => {
+      const cornerOf = async (encoded: Buffer) => {
+        const { data, info } = await sharp(encoded)
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        return { pixel: pixelAt(data, info.width, info.channels, 0, 0), info };
+      };
+
+      it('keeps transparency by default', async () => {
+        const context = testContext();
+        const decoded = await handler.decode(
+          imageFixture('fully-transparent.png'),
+          context,
+        );
+
+        const { pixel } = await cornerOf(
+          await handler.encode(decoded, context),
+        );
+
+        expect(pixel[3]).toBe(0);
+      });
+
+      it('flattens onto an opaque colour', async () => {
+        const context = testContext({ backgroundColor: '#ff0000' });
+        const decoded = await handler.decode(
+          imageFixture('fully-transparent.png'),
+          context,
+        );
+
+        const { pixel, info } = await cornerOf(
+          await handler.encode(decoded, context),
+        );
+
+        expect(info.channels).toBe(3);
+        expect(pixel).toEqual([255, 0, 0]);
+      });
+
+      it('lays a translucent colour under the image, keeping alpha', async () => {
+        const context = testContext({ backgroundColor: '#0000ff80' });
+        const decoded = await handler.decode(
+          imageFixture('fully-transparent.png'),
+          context,
+        );
+
+        const { pixel } = await cornerOf(
+          await handler.encode(decoded, context),
+        );
+
+        expect(pixel).toEqual([0, 0, 255, 128]);
+      });
+
+      it('changes nothing for a source without alpha', async () => {
+        const context = testContext({ backgroundColor: '#00ff00' });
+        const decoded = await handler.decode(
+          imageFixture('solid.jpg'),
+          context,
+        );
+        const plain = await handler.encode(decoded, testContext());
+
+        expect(await handler.encode(decoded, context)).toEqual(plain);
+      });
     });
 
     it('stops on an already-expired deadline', async () => {

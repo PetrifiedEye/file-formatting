@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 
 import { ConfigService } from '@/core/config/config.service';
+import { CursorCodec } from '@/core/pagination/cursor-codec';
+import { fetchPageWithTotal } from '@/core/pagination/cursor-page';
 import {
   ConversionOutcome,
   RecordedFormat,
@@ -16,9 +17,7 @@ import { TransformationHistoryPageDto } from './dto/transformation-history-page.
 import { TransformationHistoryQueryDto } from './dto/transformation-history-query.dto';
 import { TransformationHistoryStatus } from './transformation-history.enums';
 
-const CURSOR_VERSION = 1;
 const DEFAULT_LIMIT = 20;
-const INVALID_CURSOR_MESSAGE = 'Invalid cursor';
 
 /** The query as the service actually ran it — what the cursor is bound to. */
 interface EffectiveOptions {
@@ -32,9 +31,8 @@ interface EffectiveOptions {
   limit: number;
 }
 
-interface CursorPayload {
-  v: number;
-  fp: string;
+/** The last row served: the `(createdAt, id)` keyset tuple. */
+interface CursorPosition {
   id: string;
   createdAt: string;
 }
@@ -60,22 +58,6 @@ const SELECTED_COLUMNS = [
   'record.createdAt',
 ] as const;
 
-function base64UrlEncode(input: Buffer): string {
-  return input
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-}
-
-function base64UrlDecode(input: string): Buffer {
-  const padded = input
-    .replace(/-/g, '+')
-    .replace(/_/g, '/')
-    .padEnd(input.length + ((4 - (input.length % 4)) % 4), '=');
-  return Buffer.from(padded, 'base64');
-}
-
 /**
  * Reads the transformation history features 010 and 011 write.
  *
@@ -85,14 +67,14 @@ function base64UrlDecode(input: string): Buffer {
  */
 @Injectable()
 export class TransformationHistoryService {
-  private readonly hmacSecret: string;
+  private readonly cursors: CursorCodec<CursorPosition>;
 
   constructor(
     @InjectRepository(ConversionRecord)
     private readonly records: Repository<ConversionRecord>,
     private readonly configService: ConfigService,
   ) {
-    this.hmacSecret = this.configService.get('JWT_ACCESS_SECRET');
+    this.cursors = new CursorCodec(this.configService.get('JWT_ACCESS_SECRET'));
   }
 
   async getHistory(
@@ -114,8 +96,10 @@ export class TransformationHistoryService {
 
     const fingerprint = this.computeFingerprint(options);
 
-    const cursorPayload = query.cursor
-      ? this.decodeCursor(query.cursor, fingerprint)
+    // Covers both a changed filter set and a cursor carried across from
+    // another user's history: both are in the fingerprint.
+    const cursor = query.cursor
+      ? this.cursors.decode(query.cursor, fingerprint)
       : null;
 
     const qb = this.records
@@ -124,13 +108,14 @@ export class TransformationHistoryService {
       .where('record.userId = :subjectUserId', { subjectUserId });
 
     this.applyFilters(qb, options);
-    this.applyKeyset(qb, cursorPayload);
 
-    qb.orderBy('record.createdAt', 'DESC')
-      .addOrderBy('record.id', 'DESC')
-      .take(options.limit + 1);
-
-    const rows = await qb.getMany();
+    const { rows, total } = await fetchPageWithTotal(qb, (page) => {
+      this.applyKeyset(page, cursor);
+      page
+        .orderBy('record.createdAt', 'DESC')
+        .addOrderBy('record.id', 'DESC')
+        .take(options.limit + 1);
+    });
     const hasMore = rows.length > options.limit;
     const pageRows = hasMore ? rows.slice(0, options.limit) : rows;
 
@@ -141,7 +126,7 @@ export class TransformationHistoryService {
         ? this.encodeCursor(pageRows[pageRows.length - 1], fingerprint)
         : null;
 
-    return { items, nextCursor };
+    return { items, nextCursor, total };
   }
 
   /**
@@ -216,7 +201,7 @@ export class TransformationHistoryService {
    */
   private applyKeyset(
     qb: SelectQueryBuilder<ConversionRecord>,
-    cursor: CursorPayload | null,
+    cursor: CursorPosition | null,
   ): void {
     if (!cursor) {
       return;
@@ -266,7 +251,7 @@ export class TransformationHistoryService {
    * hypothetical one.
    */
   private computeFingerprint(options: EffectiveOptions): string {
-    const payload = JSON.stringify({
+    return this.cursors.fingerprint({
       subjectUserId: options.subjectUserId,
       type: options.type ?? null,
       sourceFormat: options.sourceFormat ?? null,
@@ -276,66 +261,12 @@ export class TransformationHistoryService {
       createdAtTo: options.createdAtTo ?? null,
       limit: options.limit,
     });
-
-    return createHash('sha256').update(payload).digest('hex');
   }
 
   private encodeCursor(lastRow: ConversionRecord, fingerprint: string): string {
-    const payload: CursorPayload = {
-      v: CURSOR_VERSION,
-      fp: fingerprint,
+    return this.cursors.encode(fingerprint, {
       id: lastRow.id,
       createdAt: lastRow.createdAt.toISOString(),
-    };
-
-    const json = JSON.stringify(payload);
-    const jsonPart = base64UrlEncode(Buffer.from(json, 'utf8'));
-    const signature = createHmac('sha256', this.hmacSecret)
-      .update(json)
-      .digest();
-
-    return `${jsonPart}.${base64UrlEncode(signature)}`;
-  }
-
-  private decodeCursor(token: string, fingerprint: string): CursorPayload {
-    try {
-      const parts = token.split('.');
-      if (parts.length !== 2) {
-        throw new Error('malformed');
-      }
-
-      const [jsonPart, signaturePart] = parts;
-      const json = base64UrlDecode(jsonPart).toString('utf8');
-
-      const expectedSignature = createHmac('sha256', this.hmacSecret)
-        .update(json)
-        .digest();
-      const actualSignature = base64UrlDecode(signaturePart);
-
-      if (
-        expectedSignature.length !== actualSignature.length ||
-        !timingSafeEqual(expectedSignature, actualSignature)
-      ) {
-        throw new Error('bad signature');
-      }
-
-      const payload = JSON.parse(json) as CursorPayload;
-
-      if (payload.v !== CURSOR_VERSION) {
-        throw new Error('bad version');
-      }
-
-      // Covers both a changed filter set and a cursor carried across from
-      // another user's history: both are in the fingerprint.
-      if (payload.fp !== fingerprint) {
-        throw new Error('fingerprint mismatch');
-      }
-
-      return payload;
-    } catch {
-      // Uniform message: distinguishing "forged" from "stale" would tell a
-      // caller which of the two they achieved.
-      throw new BadRequestException(INVALID_CURSOR_MESSAGE);
-    }
+    });
   }
 }

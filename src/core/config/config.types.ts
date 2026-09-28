@@ -99,13 +99,26 @@ export interface Config {
   CONVERSION_TIMEOUT_MS?: number;
 
   /**
-   * How many conversions may hold a parsed document in memory at once.
-   *
-   * This bounds **memory, not latency**: Node runs one synchronous parse at a
-   * time regardless. What it prevents is N concurrent uploads each holding an
-   * input buffer and its expanded model.
+   * How many document conversions run at once — and so how many worker
+   * threads parse and serialize. Bounds both memory (each holds an input and
+   * its expanded model) and CPU.
    */
   CONVERSION_MAX_CONCURRENT?: number;
+
+  /**
+   * How many further conversions may wait for a slot. Past this a request is
+   * refused at once with 503 `service_busy` instead of joining a backlog it
+   * would time out in.
+   */
+  CONVERSION_MAX_QUEUE?: number;
+
+  /**
+   * Parse and serialize in worker threads (default), so a large document
+   * never blocks the event loop and the deadline can interrupt a parse that
+   * is already running. `false` runs them on the main thread — an escape
+   * hatch, not a mode to run in.
+   */
+  CONVERSION_USE_WORKER_THREADS?: boolean;
 
   /**
    * Root for retained conversion results. Deliberately NOT `ASSETS_DIR`, which
@@ -139,8 +152,9 @@ export interface Config {
 
   /**
    * Decoded pixel budget, read from the container header before any pixel
-   * buffer is allocated. Peak raster memory is bounded by
-   * `IMAGE_MAX_PIXELS x 4 bytes x IMAGE_MAX_CONCURRENT`.
+   * buffer is allocated. Peak raster memory is roughly
+   * `IMAGE_MAX_PIXELS x 7 bytes x IMAGE_MAX_CONCURRENT`, most of it inside
+   * libvips (see the image-conversion README).
    */
   IMAGE_MAX_PIXELS?: number;
 
@@ -148,8 +162,9 @@ export interface Config {
   IMAGE_MAX_OUTPUT_BYTES?: number;
 
   /**
-   * What transparency is composited onto when the target cannot hold alpha,
-   * and what an SVG is rasterised over. `#rrggbb`.
+   * What transparency is composited onto when a request names no
+   * `backgroundColor`: `transparent` (default), `#rrggbb` or `#rrggbbaa`. A
+   * JPEG, which cannot be transparent, gets the colour over white.
    */
   IMAGE_BACKGROUND_COLOR?: string;
 
@@ -166,11 +181,25 @@ export interface Config {
    */
   IMAGE_MAX_CONCURRENT?: number;
 
+  /** How many further image conversions may wait; past this, 503. */
+  IMAGE_MAX_QUEUE?: number;
+
   /**
-   * Fonts available to SVG rasterisation. Empty means no fonts at all and no
-   * system-font scan, so `<text>` renders as nothing — deliberate, because
-   * substituting whatever font a host happens to have would make output
-   * non-reproducible across machines.
+   * Fonts available to SVG rasterisation — the bundled `resources/fonts` by
+   * default, so `<text>` renders identically on every host. Relative paths
+   * resolve against the working directory.
    */
   IMAGE_SVG_FONT_DIR?: string;
+
+  /**
+   * Also let SVG rasterisation use the host's installed fonts (for scripts the
+   * bundled font lacks). Off by default: output would then vary by machine.
+   */
+  IMAGE_SVG_LOAD_SYSTEM_FONTS?: boolean;
+
+  /**
+   * The family `<text>` falls back to when it names none, a generic one, or
+   * one that is not installed. Must exist in the loaded fonts.
+   */
+  IMAGE_SVG_DEFAULT_FONT_FAMILY?: string;
 }

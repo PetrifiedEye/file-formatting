@@ -1,15 +1,7 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import fastifyCookie from '@fastify/cookie';
-import fastifyMultipart from '@fastify/multipart';
-import fastifyStatic from '@fastify/static';
-import { resolve } from 'path';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
@@ -20,7 +12,6 @@ import {
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 
 import { AppModule } from '../src/core/app/app.module';
-import { ConfigService } from '../src/core/config/config.service';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
 import {
   ConversionErrorCategory,
@@ -42,6 +33,7 @@ import { Permission } from '../src/modules/rbac/entities/permission.entity';
 import { Role } from '../src/modules/rbac/entities/role.entity';
 import { UserRole } from '../src/modules/rbac/entities/user-role.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
+import { createTestApp } from './support/create-test-app';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 const SELF_PATH = '/api/transformations/history';
@@ -63,6 +55,7 @@ interface HistoryItem {
 interface HistoryPageBody {
   items: HistoryItem[];
   nextCursor: string | null;
+  total: number;
 }
 
 interface RowSpec {
@@ -99,7 +92,6 @@ describe('Transformation History (e2e)', () => {
   let auditRepository: Repository<TransformationHistoryAuditEvent>;
   let accessConfigService: AccessConfigService;
   let throttlerStorage: ThrottlerStorageService;
-  let configService: ConfigService;
 
   let adminUser: User;
   let subjectUser: User;
@@ -115,45 +107,7 @@ describe('Transformation History (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-
-    configService = moduleFixture.get(ConfigService);
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, {
-        secret: configService.get('COOKIE_SECRET'),
-      });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyMultipart, {
-        limits: {
-          fileSize: Number(configService.get('PHOTO_MAX_SIZE_BYTES')),
-          files: 1,
-        },
-      });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyStatic, {
-        root: resolve(configService.get('ASSETS_DIR')),
-        prefix: '/assets/',
-      });
-
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
@@ -363,6 +317,7 @@ describe('Transformation History (e2e)', () => {
       });
 
       expect(body.items).toHaveLength(3);
+      expect(body.total).toBe(3);
       expect(body.items.map((item) => item.id).sort()).toEqual(
         own.map((row) => row.id).sort(),
       );
@@ -442,7 +397,7 @@ describe('Transformation History (e2e)', () => {
         .set('Cookie', subjectCookie)
         .expect(200);
 
-      expect(response.body).toEqual({ items: [], nextCursor: null });
+      expect(response.body).toEqual({ items: [], nextCursor: null, total: 0 });
     });
   });
 
@@ -619,6 +574,7 @@ describe('Transformation History (e2e)', () => {
       await expect(fetchSelf('type=file&sourceFormat=png')).resolves.toEqual({
         items: [],
         nextCursor: null,
+        total: 0,
       });
     });
 
@@ -697,6 +653,9 @@ describe('Transformation History (e2e)', () => {
       expect((second.body as HistoryPageBody).items[0].id).not.toEqual(
         (first.body as HistoryPageBody).items[0].id,
       );
+      // One item per page, three in all: the total says so from page one.
+      expect((first.body as HistoryPageBody).total).toBe(3);
+      expect((second.body as HistoryPageBody).total).toBe(3);
     });
 
     it('refuses a cursor minted while reading another user s history', async () => {
@@ -988,7 +947,7 @@ describe('Transformation History (e2e)', () => {
         Object.keys(
           schemas.TransformationHistoryPageDto.properties ?? {},
         ).sort(),
-      ).toEqual(['items', 'nextCursor']);
+      ).toEqual(['items', 'nextCursor', 'total']);
     });
   });
 });

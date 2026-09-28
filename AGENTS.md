@@ -28,6 +28,7 @@ If verification fails, fix every error before finishing. Do not leave ESLint war
 | `npm run lint` | Lint and auto-fix |
 | `npm run lint:check` | Lint without modifying files (used by `verify`) |
 | `npm run verify` | **Required gate** — typecheck + lint:check + unit tests |
+| `npm run test:cov` | Unit tests with coverage; fails below the thresholds in `package.json` (90% statements/functions/lines, 78% branches) |
 
 ## Stack and layout
 
@@ -47,8 +48,25 @@ Every feature is a NestJS module with a controller and service(s):
 
 - **Controllers** — HTTP only: routing, DTO binding, response shaping, Swagger decorators, rate limiting
 - **Services** — business logic, repositories, orchestration
-- **DTOs** — request/response classes with `class-validator` decorators and `@nestjs/swagger` `ApiProperty`
+- **DTOs** — request/response classes: a Joi schema attached with `@JoiSchema(...)` plus `@nestjs/swagger` `ApiProperty` for the docs
 - **Entities** — TypeORM entities in `entities/` subdirectories
+
+Group a module's files by sub-feature once it outgrows a flat folder. The module root keeps
+`*.module.ts`, the entry-point controller/service, and module-wide `*.constants|enums|exception.ts`;
+shared kinds stay in `dto/`, `entities/`, `guards/`, `utils/`. Everything else lives in a folder
+named after the sub-feature, with its spec beside it:
+
+```
+modules/auth/
+  auth.module.ts  auth.controller.ts  auth.service.ts
+  registration/   confirmation-challenge, confirmation-mail, registration-audit
+  login/          login-challenge, login-audit
+  session/        auth-session, token
+  password-reset/ password-reset
+  dto/  entities/  guards/  utils/  validators/
+```
+
+Imports across sub-feature folders use the `@/` alias; siblings in the same folder use `./`.
 
 Scaffold with Nest CLI when adding features:
 
@@ -60,7 +78,10 @@ nest generate service <name>
 
 ### Validation and config
 
-- Request DTOs use `class-validator`; global `ValidationPipe` has `whitelist: true`
+- Joi is the only validation library. Request DTOs attach a schema with `@JoiSchema(...)` (`src/core/validation/`); the global `JoiValidationPipe` validates them, strips unknown keys and returns the converted value
+  - Reuse fragments from `src/core/validation/joi-fields.ts` (`emailField`, `uuidField`, `pageLimitField`, …)
+  - JSON-body numbers and booleans use `.strict()` so `"true"`/`"5"` are not coerced; query-string numbers are converted
+  - Multipart fields never reach the pipe: validate them with `validateWithSchema(...)`
 - Environment config is validated via Joi in `ConfigModule` at startup
 - CORS origins come from environment variables — never hard-code production origins
 
@@ -95,9 +116,11 @@ Use these files as reference when adding new code:
 | Controller + Swagger + Throttle | `src/modules/auth/auth.controller.ts` |
 | Module wiring | `src/modules/auth/auth.module.ts` |
 | Request DTO | `src/modules/auth/dto/register-request.dto.ts` |
+| Query DTO (pagination) | `src/modules/users/dto/list-users-query.dto.ts` |
 | Global config validation | `src/core/config/config.module.ts` |
 | Email template (React Email) | `src/core/email/templates/verification-email.tsx` |
-| App bootstrap (Fastify) | `src/main.ts` |
+| App bootstrap (Fastify) | `src/main.ts`, `src/core/bootstrap/configure-app.ts` |
+| e2e app setup | `test/support/create-test-app.ts` |
 
 ## References
 

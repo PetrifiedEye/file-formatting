@@ -4,19 +4,19 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
 import { AccessConfigService } from '@/modules/rbac/access-config.service';
 
-import { AccountDeletionAuditService } from './account-deletion-audit.service';
-import { AccountDeletionService } from './account-deletion.service';
+import { AccountDeletionAuditService } from '@/modules/users/account-deletion/account-deletion-audit.service';
+import { AccountDeletionService } from '@/modules/users/account-deletion/account-deletion.service';
 import {
   AccountDeletionAuditAction,
   AccountDeletionAuditOutcome,
 } from './entities/account-deletion-audit-event.entity';
-import { ProfileAuditService } from './profile-audit.service';
+import { ProfileAuditService } from '@/modules/users/profile/profile-audit.service';
 import { UserDirectoryAuditOutcome } from './entities/user-directory-audit-event.entity';
-import { UserDirectoryAuditService } from './user-directory-audit.service';
-import { UserDirectoryService } from './user-directory.service';
+import { UserDirectoryAuditService } from '@/modules/users/directory/user-directory-audit.service';
+import { UserDirectoryService } from '@/modules/users/directory/user-directory.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
-import { EmailChangeService } from './email-change.service';
+import { EmailChangeService } from '@/modules/users/email-change/email-change.service';
 
 describe('UsersController', () => {
   let controller: UsersController;

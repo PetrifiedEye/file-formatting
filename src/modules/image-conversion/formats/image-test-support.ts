@@ -4,10 +4,12 @@ import { join } from 'path';
 import { ImageFormat } from '@/modules/conversion/conversion.enums';
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 
+import { parseBackground } from './background';
 import type {
   ImageConversionContext,
   ImageConversionLimits,
 } from './image-format-handler';
+import type { RasterImage } from './raster-image';
 
 /** Shared by the handler specs. Not imported by anything under `src` at runtime. */
 const FIXTURES = join(
@@ -35,18 +37,32 @@ export const TEST_LIMITS: ImageConversionLimits = {
   maxOutputHeight: 8192,
   maxPixels: 16000000,
   maxOutputBytes: 20971520,
-  backgroundColor: '#ffffff',
+  backgroundColor: 'transparent',
   jpegQuality: 85,
   timeoutMs: 30000,
   maxConcurrent: 2,
-  svgFontDir: null,
+  maxQueue: 16,
+  svgFontDir: join(__dirname, '..', '..', '..', '..', 'resources', 'fonts'),
+  svgLoadSystemFonts: false,
+  svgDefaultFontFamily: 'Geist',
 };
 
 export function testContext(
   overrides: Partial<ImageConversionLimits> = {},
   signal?: AbortSignal,
 ): ImageConversionContext {
-  return { limits: { ...TEST_LIMITS, ...overrides }, signal };
+  const limits = { ...TEST_LIMITS, ...overrides };
+
+  return {
+    limits,
+    signal,
+    background: parseBackground(limits.backgroundColor),
+  };
+}
+
+/** The hub's pixels, materialised — for assertions only. */
+export async function pixelsOf(image: RasterImage): Promise<Buffer> {
+  return image.toSharp().raw().toBuffer();
 }
 
 /** Assert a call refuses with one of our codes, not a library message. */

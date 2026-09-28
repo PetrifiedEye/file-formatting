@@ -1,8 +1,10 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import Joi from 'joi';
 
 import { UserStatus } from '../entities/user.entity';
+
+import { JoiSchema } from '@/core/validation/joi-schema.decorator';
+import { pageLimitField } from '@/core/validation/joi-fields';
 
 export enum UserDirectorySortField {
   CREATED_AT = 'createdAt',
@@ -15,44 +17,33 @@ export enum UserDirectorySortDirection {
   DESC = 'desc',
 }
 
+const listUsersQueryDtoSchema = Joi.object<ListUsersQueryDto>({
+  limit: pageLimitField(),
+  cursor: Joi.string().allow(''),
+  // Surrounding whitespace is ignored, and a blank search is no search.
+  search: Joi.string().trim().empty(''),
+  status: Joi.string().valid(...Object.values(UserStatus)),
+  sort: Joi.string().valid(...Object.values(UserDirectorySortField)),
+  direction: Joi.string().valid(...Object.values(UserDirectorySortDirection)),
+});
+
+@JoiSchema(listUsersQueryDtoSchema)
 export class ListUsersQueryDto {
   @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 20 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
   limit?: number;
 
   @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
   cursor?: string;
 
   @ApiPropertyOptional()
-  @IsOptional()
-  @Transform(({ value }: { value: unknown }) => {
-    if (typeof value !== 'string') {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed.length === 0 ? undefined : trimmed;
-  })
-  @IsString()
   search?: string;
 
   @ApiPropertyOptional({ enum: UserStatus })
-  @IsOptional()
-  @IsEnum(UserStatus)
   status?: UserStatus;
 
   @ApiPropertyOptional({ enum: UserDirectorySortField })
-  @IsOptional()
-  @IsEnum(UserDirectorySortField)
   sort?: UserDirectorySortField;
 
   @ApiPropertyOptional({ enum: UserDirectorySortDirection })
-  @IsOptional()
-  @IsEnum(UserDirectorySortDirection)
   direction?: UserDirectorySortDirection;
 }

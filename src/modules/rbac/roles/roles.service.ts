@@ -1,0 +1,167 @@
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+
+import { AccessConfigService } from '@/modules/rbac/access-config.service';
+import { CreateRoleDto } from '@/modules/rbac/dto/create-role.dto';
+import { UpdateRoleDto } from '@/modules/rbac/dto/update-role.dto';
+import { Grant } from '@/modules/rbac/entities/grant.entity';
+import { UserRole } from '@/modules/rbac/entities/user-role.entity';
+import {
+  RbacAuditEntityType,
+  RbacAuditEventType,
+  RbacAuditOutcome,
+} from '@/modules/rbac/entities/rbac-audit-event.entity';
+import { Role } from '@/modules/rbac/entities/role.entity';
+import { RbacAuditService } from '@/modules/rbac/audit/rbac-audit.service';
+import { RbacSelfLockoutService } from '@/modules/rbac/rbac-self-lockout.service';
+
+@Injectable()
+export class RolesService {
+  private readonly logger = new Logger(RolesService.name);
+
+  constructor(
+    @InjectRepository(Role)
+    private readonly roleRepository: Repository<Role>,
+    @InjectRepository(Grant)
+    private readonly grantRepository: Repository<Grant>,
+    @InjectRepository(UserRole)
+    private readonly userRoleRepository: Repository<UserRole>,
+    private readonly accessConfigService: AccessConfigService,
+    private readonly rbacAuditService: RbacAuditService,
+    private readonly selfLockoutService: RbacSelfLockoutService,
+  ) {}
+
+  async list(): Promise<Role[]> {
+    return this.roleRepository.find();
+  }
+
+  async create(dto: CreateRoleDto, actorUserId?: string | null): Promise<Role> {
+    const existing = await this.roleRepository.findOne({
+      where: { name: dto.name },
+    });
+    if (existing) {
+      throw new ConflictException(`Role "${dto.name}" already exists`);
+    }
+
+    const role = await this.roleRepository.save(
+      this.roleRepository.create({
+        name: dto.name,
+        description: dto.description ?? null,
+      }),
+    );
+
+    await this.accessConfigService.reload();
+    await this.rbacAuditService.record(
+      RbacAuditEventType.ROLE_CREATED,
+      RbacAuditOutcome.SUCCESS,
+      {
+        actorUserId,
+        entityType: RbacAuditEntityType.ROLE,
+        entityId: role.id,
+      },
+    );
+
+    return role;
+  }
+
+  async update(
+    id: string,
+    dto: UpdateRoleDto,
+    actorUserId?: string | null,
+  ): Promise<Role> {
+    const role = await this.roleRepository.findOne({ where: { id } });
+    if (!role) {
+      throw new NotFoundException(`Role ${id} not found`);
+    }
+
+    if (dto.name && dto.name !== role.name) {
+      const existing = await this.roleRepository.findOne({
+        where: { name: dto.name },
+      });
+      if (existing) {
+        throw new ConflictException(`Role "${dto.name}" already exists`);
+      }
+      role.name = dto.name;
+    }
+
+    if (dto.description !== undefined) {
+      role.description = dto.description ?? null;
+    }
+
+    const saved = await this.roleRepository.save(role);
+
+    await this.accessConfigService.reload();
+    await this.rbacAuditService.record(
+      RbacAuditEventType.ROLE_UPDATED,
+      RbacAuditOutcome.SUCCESS,
+      {
+        actorUserId,
+        entityType: RbacAuditEntityType.ROLE,
+        entityId: saved.id,
+      },
+    );
+
+    return saved;
+  }
+
+  async delete(id: string, actorUserId?: string | null): Promise<void> {
+    const role = await this.roleRepository.findOne({ where: { id } });
+    if (!role) {
+      throw new NotFoundException(`Role ${id} not found`);
+    }
+
+    // Deleting a role drops every `user_roles` row for it (ON DELETE CASCADE),
+    // so an admin deleting a role they belong to can revoke their own access.
+    await this.selfLockoutService.assertRetainsControl(actorUserId, {
+      kind: 'role-deleted',
+      roleId: id,
+    });
+
+    const dependentGrant = await this.grantRepository.findOne({
+      where: { roleId: id },
+    });
+    if (dependentGrant) {
+      throw new ConflictException(
+        `Role ${id} cannot be deleted: it is referenced by existing grants`,
+      );
+    }
+
+    // The cascade is silent: the members lose the role and nothing in the
+    // audit trail says how many, or who. Count them first so the row records
+    // the real blast radius of the delete, and name them while they are still
+    // there to be named.
+    const memberships = await this.userRoleRepository.find({
+      where: { roleId: id },
+    });
+
+    if (memberships.length > 0) {
+      this.logger.warn(
+        `Deleting role "${role.name}" (${id}) removes it from ${memberships.length} user(s)`,
+      );
+    }
+
+    await this.roleRepository.delete(id);
+
+    await this.accessConfigService.reload();
+    await this.rbacAuditService.record(
+      RbacAuditEventType.ROLE_DELETED,
+      RbacAuditOutcome.SUCCESS,
+      {
+        actorUserId,
+        entityType: RbacAuditEntityType.ROLE,
+        entityId: id,
+        metadata: {
+          roleName: role.name,
+          membershipsRemoved: memberships.length,
+          memberUserIds: memberships.map((membership) => membership.userId),
+        },
+      },
+    );
+  }
+}

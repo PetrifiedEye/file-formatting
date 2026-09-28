@@ -14,25 +14,25 @@ import { UsersService } from '@/modules/users/users.service';
 import { SettingsService } from '@/modules/settings/settings.service';
 import { validatePassword } from '@/modules/settings/password-policy.validator';
 import { ConfirmationChallenge } from './entities/confirmation-challenge.entity';
-import { ConfirmationChallengeService } from './confirmation-challenge.service';
-import { ConfirmationMailService } from './confirmation-mail.service';
+import { ConfirmationChallengeService } from '@/modules/auth/registration/confirmation-challenge.service';
+import { ConfirmationMailService } from '@/modules/auth/registration/confirmation-mail.service';
 import {
   RegistrationAuditEventType,
   RegistrationAuditOutcome,
 } from './entities/registration-audit-event.entity';
-import { RegistrationAuditService } from './registration-audit.service';
+import { RegistrationAuditService } from '@/modules/auth/registration/registration-audit.service';
 import {
   LoginAuditEventType,
   LoginAuditOutcome,
 } from './entities/login-audit-event.entity';
-import { LoginAuditService } from './login-audit.service';
-import { TokenService } from './token.service';
-import { AuthSessionService } from './auth-session.service';
+import { LoginAuditService } from '@/modules/auth/login/login-audit.service';
+import { TokenService } from '@/modules/auth/session/token.service';
+import { AuthSessionService } from '@/modules/auth/session/auth-session.service';
 import { SessionRevocationReason } from './entities/auth-session.entity';
 import {
   LoginChallengeService,
   LoginChallengeVerifyFailure,
-} from './login-challenge.service';
+} from '@/modules/auth/login/login-challenge.service';
 import { normalizeEmail } from './utils/email-normalizer';
 import {
   EMAIL_CAP_MAX,

@@ -1,5 +1,6 @@
 import { ImageFormat } from '@/modules/conversion/conversion.enums';
 
+import type { Background } from './background';
 import { RasterImage } from './raster-image';
 
 /**
@@ -19,14 +20,24 @@ export interface ImageConversionLimits {
   /** Checked from the container header, before any allocation (FR-019). */
   maxPixels: number;
   maxOutputBytes: number;
-  /** `#rrggbb`. What alpha is composited onto, and what SVG renders over. */
+  /**
+   * `transparent`, `#rrggbb` or `#rrggbbaa`: what transparency is composited
+   * onto when the request names no `backgroundColor`. `transparent` by
+   * default — a JPEG, which cannot be transparent, then gets white.
+   */
   backgroundColor: string;
   /** Fixed; never caller-supplied. */
   jpegQuality: number;
   timeoutMs: number;
   maxConcurrent: number;
-  /** `null` means no fonts at all, so `<text>` renders as nothing. */
+  /** Conversions that may wait for a slot; past this, `service_busy`. */
+  maxQueue: number;
+  /** Fonts for SVG `<text>`; the bundled set by default. */
   svgFontDir: string | null;
+  /** Also scan the host's fonts. Off by default, for reproducible output. */
+  svgLoadSystemFonts: boolean;
+  /** The family `<text>` falls back to, and the generic families map to. */
+  svgDefaultFontFamily: string;
 }
 
 /**
@@ -37,6 +48,11 @@ export interface ImageConversionLimits {
  */
 export interface ImageConversionContext {
   limits: ImageConversionLimits;
+  /**
+   * This request's background — its `backgroundColor` field, or the
+   * configured default. Applied by the encoders, once, whatever the source.
+   */
+  background: Background;
   /** Expires with the conversion deadline. */
   signal?: AbortSignal;
 }

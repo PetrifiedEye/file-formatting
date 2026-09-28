@@ -28,6 +28,7 @@ interface RequestWithUser extends FastifyRequest {
 const EMPTY_PAGE: TransformationHistoryPageDto = {
   items: [],
   nextCursor: null,
+  total: 0,
 };
 
 function requestFor(id: string, roles: string[] = []): RequestWithUser {
@@ -76,6 +77,7 @@ describe('TransformationHistoryController', () => {
       const page: TransformationHistoryPageDto = {
         items: [],
         nextCursor: 'opaque',
+        total: 7,
       };
       historyService.getHistory.mockResolvedValue(page);
 

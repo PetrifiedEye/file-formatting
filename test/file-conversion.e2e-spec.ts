@@ -1,17 +1,10 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
-import fastifyCookie from '@fastify/cookie';
-import fastifyMultipart from '@fastify/multipart';
-import fastifyStatic from '@fastify/static';
 import { readFileSync } from 'fs';
 import { readFile, rm } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
@@ -27,7 +20,7 @@ import {
   ConversionFileStorageService,
 } from '../src/core/storage/conversion-file-storage.service';
 import { ConversionRecord } from '../src/modules/conversion/entities/conversion-record.entity';
-import { ConversionRetentionService } from '../src/modules/conversion/conversion-retention.service';
+import { ConversionRetentionService } from '../src/modules/conversion/history/conversion-retention.service';
 import { ConversionStoredFile } from '../src/modules/conversion/entities/conversion-stored-file.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
@@ -36,6 +29,7 @@ import {
   TransformationResultAuditAction,
   TransformationResultAuditOutcome,
 } from '../src/modules/transformation-result-storage/transformation-result.enums';
+import { createTestApp } from './support/create-test-app';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 const FIXTURES = join(__dirname, 'support', 'conversion-fixtures');
@@ -115,44 +109,9 @@ describe('File Format Conversion (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-
     configService = moduleFixture.get(ConfigService);
 
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, { secret: configService.get('COOKIE_SECRET') });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyMultipart, {
-        limits: {
-          fileSize: Number(configService.get('PHOTO_MAX_SIZE_BYTES')),
-          files: 1,
-        },
-      });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyStatic, {
-        root: resolve(configService.get('ASSETS_DIR')),
-        prefix: '/assets/',
-      });
-
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
     recordRepository = moduleFixture.get(getRepositoryToken(ConversionRecord));
@@ -849,6 +808,20 @@ describe('File Format Conversion (e2e)', () => {
         .get(`/api/convert/files/${file.id}`)
         .set('Cookie', cookie);
       expect(direct.status).toBe(404);
+    });
+
+    it('refuses a second file as a conversion error, not a 500', async () => {
+      // `@fastify/multipart` raises FST_FILES_LIMIT from its parts iterator
+      // under `files: 1`. That used to escape as `internal_error`.
+      const response = await request(baseUrl)
+        .post('/api/convert')
+        .set('Cookie', cookie)
+        .attach('file', fixture('sample.csv'), 'sample.csv')
+        .attach('file', fixture('sample.csv'), 'again.csv')
+        .field('targetFormat', 'json');
+
+      expect(response.status).toBe(413);
+      expect(response.body.code).toBe('input_too_large');
     });
 
     it('refuses a malformed store flag', async () => {

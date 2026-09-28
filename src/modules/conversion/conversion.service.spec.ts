@@ -4,17 +4,21 @@ import { ConversionErrorCode } from './conversion.constants';
 import { ConversionFormat } from './conversion.enums';
 import { ConversionRetentionOutcome } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
-import { ConversionHistoryService } from './conversion-history.service';
-import { ConversionRetentionService } from './conversion-retention.service';
-import { ConversionResult, ConversionService } from './conversion.service';
-import { FormatDetectorService } from './format-detector.service';
-import { FormatRegistryService } from './format-registry.service';
+import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
+import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
+import {
+  ConversionResult,
+  ConversionService,
+  DocumentUpload,
+} from './conversion.service';
+import { FormatDetectorService } from '@/modules/conversion/detection/format-detector.service';
+import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
 import { CsvHandler } from './formats/csv.handler';
 import type { ConversionLimits } from './formats/format-handler';
 import { JsonHandler } from './formats/json.handler';
 import { XmlHandler } from './formats/xml.handler';
 import { YamlHandler } from './formats/yaml.handler';
-import { UploadReader } from './upload-reader';
+import { UploadReader } from '@/modules/conversion/upload/upload-reader';
 
 const baseLimits: ConversionLimits = {
   maxInputBytes: {
@@ -29,6 +33,7 @@ const baseLimits: ConversionLimits = {
   maxCsvColumns: 1024,
   timeoutMs: 10_000,
   maxConcurrent: 4,
+  maxQueue: 16,
 };
 
 /** The same two records, spelled in each of the four formats. */
@@ -393,9 +398,8 @@ describe('ConversionService', () => {
   });
 
   describe('concurrency bound (SC-008)', () => {
-    // It bounds memory, not latency — Node runs one synchronous parse at a
-    // time regardless. What it prevents is N uploads each holding a buffer
-    // and its expanded model.
+    // Bounds how many conversions run (each on a worker thread in the
+    // application, holding a buffer and its expanded model) and how many wait.
     it('runs every queued conversion, not just the first batch', async () => {
       const service = serviceWith({ maxConcurrent: 2 });
 
@@ -434,6 +438,32 @@ describe('ConversionService', () => {
       ).resolves.toBeDefined();
     });
 
+    it('refuses with service_busy once the queue is full', async () => {
+      const service = serviceWith({ maxConcurrent: 1, maxQueue: 1 });
+
+      const outcomes = await Promise.allSettled(
+        Array.from({ length: 3 }, () =>
+          run(
+            service,
+            FIXTURES[ConversionFormat.CSV],
+            ConversionFormat.JSON,
+            'sample.csv',
+          ),
+        ),
+      );
+
+      const refused = outcomes.filter(
+        (outcome): outcome is PromiseRejectedResult =>
+          outcome.status === 'rejected',
+      );
+      expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(2);
+      expect(refused).toHaveLength(1);
+      expect((refused[0].reason as ConversionException).code).toBe(
+        ConversionErrorCode.SERVICE_BUSY,
+      );
+      expect((refused[0].reason as ConversionException).getStatus()).toBe(503);
+    });
+
     it('holds waiters to the same deadline', async () => {
       // Queueing behind other conversions must not buy a request extra time.
       const service = serviceWith({ maxConcurrent: 1, timeoutMs: 0 });
@@ -456,28 +486,26 @@ describe('ConversionService', () => {
   });
 
   describe('history-first retention finalization', () => {
-    const collect = (
-      retentionRequested: boolean,
-    ): Parameters<ConversionService['execute']>[1] => {
-      return (state) => {
-        state.originalFileName = 'sample.csv';
-        state.sourceFormat = ConversionFormat.CSV;
-        state.targetFormat = ConversionFormat.JSON;
-        state.inputSizeBytes = Buffer.byteLength(
-          FIXTURES[ConversionFormat.CSV],
-        );
-        state.retentionRequested = retentionRequested;
+    const attempt = (retentionRequested: boolean) => ({
+      startedAt: new Date(),
+      originalFileName: 'sample.csv',
+      sourceFormat: ConversionFormat.CSV,
+      targetFormat: ConversionFormat.JSON,
+      inputSizeBytes: Buffer.byteLength(FIXTURES[ConversionFormat.CSV]),
+      retentionRequested,
+    });
 
-        return Promise.resolve({
-          received: {
-            text: FIXTURES[ConversionFormat.CSV],
-            sourceFormat: ConversionFormat.CSV,
-            sizeBytes: state.inputSizeBytes,
-          },
-          targetFormat: ConversionFormat.JSON,
-        });
-      };
-    };
+    const collect = (retentionRequested: boolean): DocumentUpload => ({
+      ok: true,
+      attempt: attempt(retentionRequested),
+      received: {
+        text: FIXTURES[ConversionFormat.CSV],
+        fileName: 'sample.csv',
+        sizeBytes: Buffer.byteLength(FIXTURES[ConversionFormat.CSV]),
+      },
+      targetFormat: ConversionFormat.JSON,
+      fields: { targetFormat: ConversionFormat.JSON },
+    });
 
     it('preserves result bytes and metadata while using the shared finalizer', async () => {
       const harness = executionHarness();
@@ -521,9 +549,10 @@ describe('ConversionService', () => {
       const harness = executionHarness();
       const failure = new ConversionException(ConversionErrorCode.PARSE_ERROR);
 
-      const execution = harness.service.execute('user-1', (state) => {
-        state.retentionRequested = true;
-        return Promise.reject(failure);
+      const execution = harness.service.execute('user-1', {
+        ok: false,
+        attempt: { ...attempt(true), sourceFormat: null, targetFormat: null },
+        failure,
       });
 
       await expect(execution).rejects.toBe(failure);
@@ -556,6 +585,45 @@ describe('ConversionService', () => {
         expect.objectContaining({ conversionRecordId: null }),
       );
     });
+  });
+
+  /**
+   * FINDING 4 of the code review: detection confirmed a non-conclusive format
+   * by parsing the whole document, and the pipeline then parsed it again.
+   */
+  it('parses the source exactly once', async () => {
+    const json = new JsonHandler();
+    const readSpy = jest.spyOn(json, 'read');
+    const registry = new FormatRegistryService(
+      [new CsvHandler(), json, new XmlHandler(), new YamlHandler()],
+      { ...baseLimits },
+    );
+    const service = new ConversionService(
+      registry,
+      new FormatDetectorService(registry),
+      { record: jest.fn() } as unknown as ConversionHistoryService,
+      { finalize: jest.fn() } as unknown as ConversionRetentionService,
+      { ...baseLimits },
+    );
+
+    await run(service, '{"a":1}', ConversionFormat.CSV, 'upload.json');
+
+    expect(readSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the source format it detected, even on a refusal', async () => {
+    const detected: ConversionFormat[] = [];
+
+    await expect(
+      serviceWith()
+        .receive(readerFor(FIXTURES[ConversionFormat.CSV]), 'sample.csv')
+        .then((received) =>
+          serviceWith().convert(received, ConversionFormat.CSV, (format) =>
+            detected.push(format),
+          ),
+        ),
+    ).rejects.toMatchObject({ code: ConversionErrorCode.SAME_FORMAT });
+    expect(detected).toEqual([ConversionFormat.CSV]);
   });
 
   it('reports the bytes it actually received', async () => {
