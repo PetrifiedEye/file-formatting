@@ -28,6 +28,7 @@ If verification fails, fix every error before finishing. Do not leave ESLint war
 | `npm run lint` | Lint and auto-fix |
 | `npm run lint:check` | Lint without modifying files (used by `verify`) |
 | `npm run verify` | **Required gate** — typecheck + lint:check + unit tests |
+| `npm run test:cov` | Unit tests with coverage; fails below the thresholds in `package.json` (90% statements/functions/lines, 78% branches) |
 
 ## Stack and layout
 
