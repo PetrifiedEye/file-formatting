@@ -55,6 +55,7 @@ interface HistoryItem {
 interface HistoryPageBody {
   items: HistoryItem[];
   nextCursor: string | null;
+  total: number;
 }
 
 interface RowSpec {
@@ -316,6 +317,7 @@ describe('Transformation History (e2e)', () => {
       });
 
       expect(body.items).toHaveLength(3);
+      expect(body.total).toBe(3);
       expect(body.items.map((item) => item.id).sort()).toEqual(
         own.map((row) => row.id).sort(),
       );
@@ -395,7 +397,7 @@ describe('Transformation History (e2e)', () => {
         .set('Cookie', subjectCookie)
         .expect(200);
 
-      expect(response.body).toEqual({ items: [], nextCursor: null });
+      expect(response.body).toEqual({ items: [], nextCursor: null, total: 0 });
     });
   });
 
@@ -572,6 +574,7 @@ describe('Transformation History (e2e)', () => {
       await expect(fetchSelf('type=file&sourceFormat=png')).resolves.toEqual({
         items: [],
         nextCursor: null,
+        total: 0,
       });
     });
 
@@ -650,6 +653,9 @@ describe('Transformation History (e2e)', () => {
       expect((second.body as HistoryPageBody).items[0].id).not.toEqual(
         (first.body as HistoryPageBody).items[0].id,
       );
+      // One item per page, three in all: the total says so from page one.
+      expect((first.body as HistoryPageBody).total).toBe(3);
+      expect((second.body as HistoryPageBody).total).toBe(3);
     });
 
     it('refuses a cursor minted while reading another user s history', async () => {
@@ -941,7 +947,7 @@ describe('Transformation History (e2e)', () => {
         Object.keys(
           schemas.TransformationHistoryPageDto.properties ?? {},
         ).sort(),
-      ).toEqual(['items', 'nextCursor']);
+      ).toEqual(['items', 'nextCursor', 'total']);
     });
   });
 });

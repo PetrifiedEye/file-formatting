@@ -33,6 +33,7 @@ interface DirectoryPageBody {
     lastLoginAt: string | null;
   }[];
   nextCursor: string | null;
+  total: number;
 }
 
 function extractSessionCookie(setCookieHeader: string[] | undefined): string {
@@ -281,6 +282,11 @@ describe('Admin User Directory (e2e)', () => {
       expect(secondIdsA).toEqual(secondIdsB);
       expect(firstIds.some((id) => secondIdsA.includes(id))).toBe(false);
       expect(secondPageA.nextCursor).toBeNull();
+
+      // The total spans every page, so it is the same on both, and it is
+      // exactly the number of items the pages add up to.
+      expect(firstPage.total).toBe(firstIds.length + secondIdsA.length);
+      expect(secondPageA.total).toBe(firstPage.total);
     });
 
     it('returns nextCursor null on the first call when total users are within the limit', async () => {
@@ -336,6 +342,7 @@ describe('Admin User Directory (e2e)', () => {
 
       const body = response.body as DirectoryPageBody;
       expect(body.items.map((i) => i.id)).toEqual([alice.id]);
+      expect(body.total).toBe(1);
     });
 
     it('matches by exact account id', async () => {

@@ -237,10 +237,26 @@ class FakeQueryBuilder {
     return this;
   }
 
-  getMany(): Promise<Record<string, unknown>[]> {
-    const filtered = this.rows.filter((row) =>
+  clone(): FakeQueryBuilder {
+    const copy = new FakeQueryBuilder(this.rows);
+    copy.conditions = [...this.conditions];
+    copy.orderClauses = [...this.orderClauses];
+    copy.limit = this.limit;
+    return copy;
+  }
+
+  getCount(): Promise<number> {
+    return Promise.resolve(this.filtered().length);
+  }
+
+  private filtered(): Record<string, unknown>[] {
+    return this.rows.filter((row) =>
       this.conditions.every(({ sql, params }) => evalExpr(sql, params, row)),
     );
+  }
+
+  getMany(): Promise<Record<string, unknown>[]> {
+    const filtered = this.filtered();
     const sorted = [...filtered].sort((a, b) => {
       for (const clause of this.orderClauses) {
         const cmp = compareForSort(a, b, clause);
@@ -348,6 +364,41 @@ describe('UserDirectoryService', () => {
       const page = await service.list(query({ limit: 20 }));
 
       expect(page.nextCursor).toBeNull();
+    });
+
+    it('reports the filtered total, the same on every page', async () => {
+      rows = [
+        buildUser({ id: UUID_A, email: 'a@example.com' }),
+        buildUser({ id: UUID_B, email: 'b@example.com' }),
+        buildUser({ id: UUID_C, email: 'c@example.com' }),
+        buildUser({ id: UUID_D, email: 'd@other.test' }),
+        buildUser({ id: UUID_E, deletionStartedAt: new Date() }),
+      ];
+
+      const first = await service.list(
+        query({ search: 'example.com', limit: 2 }),
+      );
+      const second = await service.list(
+        query({
+          search: 'example.com',
+          limit: 2,
+          cursor: first.nextCursor!,
+        }),
+      );
+
+      expect(first.items).toHaveLength(2);
+      expect(second.items).toHaveLength(1);
+      // Filters narrow it, deleted accounts never count, the cursor does not.
+      expect(first.total).toBe(3);
+      expect(second.total).toBe(3);
+    });
+
+    it('reports a total of 0 for an empty directory', async () => {
+      await expect(service.list(query())).resolves.toEqual({
+        items: [],
+        nextCursor: null,
+        total: 0,
+      });
     });
 
     it('omits rows with deletionStartedAt set', async () => {

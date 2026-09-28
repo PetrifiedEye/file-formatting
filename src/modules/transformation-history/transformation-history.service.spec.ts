@@ -168,14 +168,31 @@ class FakeQueryBuilder {
     return this;
   }
 
+  clone(): FakeQueryBuilder {
+    const copy = new FakeQueryBuilder(this.rows);
+    copy.selected = [...this.selected];
+    copy.conditions = [...this.conditions];
+    copy.order = [...this.order];
+    copy.limit = this.limit;
+    return copy;
+  }
+
+  getCount(): Promise<number> {
+    return Promise.resolve(this.filtered().length);
+  }
+
+  private filtered(): Record<string, unknown>[] {
+    return this.rows.filter((row) =>
+      this.conditions.every(({ sql, params }) => evalExpr(sql, params, row)),
+    );
+  }
+
   getMany(): Promise<Record<string, unknown>[]> {
     const selectedProps = new Set(
       this.selected.map((column) => column.split('.')[1]),
     );
 
-    const filtered = this.rows.filter((row) =>
-      this.conditions.every(({ sql, params }) => evalExpr(sql, params, row)),
-    );
+    const filtered = this.filtered();
 
     const sorted = [...filtered].sort((a, b) => {
       for (const { column, direction } of this.order) {
@@ -427,6 +444,36 @@ describe('TransformationHistoryService', () => {
   });
 
   describe('the response shape', () => {
+    it('reports the total across pages, for the subject and the filters only', async () => {
+      rows = [1, 2, 3, 4, 5].map((n) =>
+        buildRecord({
+          id: recordId(n),
+          createdAt: new Date(`2026-09-18T10:00:0${n}.000Z`),
+          outcome:
+            n === 5 ? ConversionOutcome.FAILURE : ConversionOutcome.SUCCESS,
+        }),
+      );
+      rows.push(buildRecord({ id: recordId(6), userId: USER_B }));
+
+      const first = await service.getHistory(
+        USER_A,
+        query({ status: TransformationHistoryStatus.SUCCESS, limit: 3 }),
+      );
+      const second = await service.getHistory(
+        USER_A,
+        query({
+          status: TransformationHistoryStatus.SUCCESS,
+          limit: 3,
+          cursor: first.nextCursor!,
+        }),
+      );
+
+      expect(first.items).toHaveLength(3);
+      expect(second.items).toHaveLength(1);
+      expect(first.total).toBe(4);
+      expect(second.total).toBe(4);
+    });
+
     it('selects an explicit column list that excludes every withheld field', async () => {
       rows = [buildRecord()];
 
@@ -543,6 +590,7 @@ describe('TransformationHistoryService', () => {
       await expect(service.getHistory(USER_A, query())).resolves.toEqual({
         items: [],
         nextCursor: null,
+        total: 0,
       });
     });
   });
@@ -637,7 +685,7 @@ describe('TransformationHistoryService', () => {
             sourceFormat: ImageFormat.PNG,
           }),
         ),
-      ).resolves.toEqual({ items: [], nextCursor: null });
+      ).resolves.toEqual({ items: [], nextCursor: null, total: 0 });
     });
 
     it('rejects a cursor when any filter changed between the two calls', async () => {
