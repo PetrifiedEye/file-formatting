@@ -7,12 +7,24 @@ import {
 import { ConversionFormat } from '@/modules/conversion/conversion.enums';
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 import { FormatRegistryService } from './format-registry.service';
+import type { DocumentNode } from '@/modules/conversion/formats/document-node';
 import type {
   ConversionLimits,
   FormatHandler,
 } from '@/modules/conversion/formats/format-handler';
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+
+/** What detection settled on, and the model its confirming parse produced. */
+export interface Identified {
+  format: ConversionFormat;
+  /**
+   * The parsed document when detection had to parse to decide — reused by the
+   * pipeline so a document is never parsed twice. Absent when a conclusive
+   * sniff decided without parsing (XML).
+   */
+  model?: DocumentNode;
+}
 
 export interface DecodedUpload {
   /** The upload as text, BOM consumed. */
@@ -106,6 +118,20 @@ export class FormatDetectorService {
     limits: ConversionLimits,
     fileName?: string,
   ): Promise<ConversionFormat> {
+    return (await this.identify(decoded, limits, fileName)).format;
+  }
+
+  /**
+   * {@link detect}, keeping the confirming parse's model so the caller can
+   * convert it instead of parsing the same text a second time (code-review
+   * FINDING 4).
+   */
+  async identify(
+    decoded: DecodedUpload,
+    limits: ConversionLimits,
+    fileName?: string,
+    signal?: AbortSignal,
+  ): Promise<Identified> {
     const named = this.hintedFormat(fileName);
     let namedFailure: ConversionException | undefined;
 
@@ -117,15 +143,15 @@ export class FormatDetectorService {
       }
 
       if (handler.sniffIsConclusive) {
-        return handler.format;
+        return { format: handler.format };
       }
 
       // The confirming parse runs against the whole (already size-capped)
       // input, so no format is accepted on a prefix the full document
       // contradicts.
       try {
-        await handler.read(decoded.text, { limits });
-        return handler.format;
+        const model = await handler.read(decoded.text, { limits, signal });
+        return { format: handler.format, model };
       } catch (error) {
         // Keep why the format the file name claimed rejected it.
         if (isNamed && error instanceof ConversionException) {

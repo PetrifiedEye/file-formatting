@@ -93,6 +93,7 @@ import { ImageFormatRegistryService } from '@/modules/image-conversion/detection
         jpegQuality: Number(config.get('IMAGE_JPEG_QUALITY')),
         timeoutMs: Number(config.get('IMAGE_CONVERSION_TIMEOUT_MS')),
         maxConcurrent: Number(config.get('IMAGE_MAX_CONCURRENT')),
+        maxQueue: Number(config.get('IMAGE_MAX_QUEUE')),
         // Empty is meaningful, and is not the same as "some default
         // directory": it means no fonts at all and no system-font scan.
         svgFontDir: String(config.get('IMAGE_SVG_FONT_DIR') ?? '') || null,

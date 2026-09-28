@@ -199,7 +199,7 @@ Nothing in this feature serves them over HTTP at all.
 
 ## Configuration
 
-Twelve `IMAGE_*` settings, all validated at startup with defaults, so an
+Thirteen `IMAGE_*` settings, all validated at startup with defaults, so an
 administrator retunes them with no code change and no migration. See
 [`.env.example`](../../../.env.example).
 
@@ -209,8 +209,11 @@ output buffers bounded by the byte caps. `IMAGE_MAX_CONCURRENT` defaults
 _lower_ than the text pipeline's because an image's expanded form is far larger
 relative to its upload than a parsed document's is.
 
-The two semaphores are separate counters on purpose: sharing one would let a
-burst of text conversions starve image conversions of slots.
+The two pipelines have separate `ConcurrencyLimiter`s on purpose: sharing one
+would let a burst of text conversions starve image conversions of slots. Each
+admits `*_MAX_CONCURRENT` at once, queues up to `*_MAX_QUEUE` more (waiters
+leave the queue when their deadline passes), and refuses the rest at once with
+503 `service_busy`.
 
 ---
 
@@ -246,7 +249,7 @@ handler: the direction set widens, and no existing handler is consulted.
 ```
 image-conversion.controller.ts      the two routes; no conversion logic
 image-upload.pipe.ts                reads the multipart body (see the conversion README)
-image-conversion.service.ts         the pipeline, deadline, semaphore, history
+image-conversion.service.ts         the pipeline, deadline, concurrency limit, history
 image-conversion.constants.ts       signatures, media types, extension hints
 detection/
   image-format-registry.service.ts  capabilities in, directions out

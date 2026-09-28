@@ -15,8 +15,10 @@ export interface ConversionLimits {
   maxNodes: number;
   maxCsvColumns: number;
   timeoutMs: number;
-  /** Conversions that may hold a parsed document at once. Bounds memory. */
+  /** Conversions that may run at once (= worker threads). Bounds memory, CPU. */
   maxConcurrent: number;
+  /** Conversions that may wait for a slot; past this, `service_busy`. */
+  maxQueue: number;
 }
 
 /**

@@ -150,6 +150,8 @@ export const configValidationSchema = Joi.object<Config>({
     .positive()
     .optional()
     .default(4),
+  CONVERSION_MAX_QUEUE: Joi.number().integer().min(0).optional().default(32),
+  CONVERSION_USE_WORKER_THREADS: Joi.boolean().optional().default(true),
   /**
    * Not `ASSETS_DIR`: that tree is served unauthenticated by `@fastify/static`,
    * and retained results must stay private to their owner (FR-027).
@@ -227,6 +229,7 @@ export const configValidationSchema = Joi.object<Config>({
     .optional()
     .default(30000),
   IMAGE_MAX_CONCURRENT: Joi.number().integer().positive().optional().default(2),
+  IMAGE_MAX_QUEUE: Joi.number().integer().min(0).optional().default(16),
   /** Empty is meaningful: no fonts, and no system-font scan. */
   IMAGE_SVG_FONT_DIR: Joi.string().allow('').optional().default(''),
 });

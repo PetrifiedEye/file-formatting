@@ -25,6 +25,8 @@ export interface ImageConversionLimits {
   jpegQuality: number;
   timeoutMs: number;
   maxConcurrent: number;
+  /** Conversions that may wait for a slot; past this, `service_busy`. */
+  maxQueue: number;
   /** `null` means no fonts at all, so `<text>` renders as nothing. */
   svgFontDir: string | null;
 }

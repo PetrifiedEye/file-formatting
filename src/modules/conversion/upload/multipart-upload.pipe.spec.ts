@@ -36,6 +36,7 @@ const limits: ConversionLimits = {
   maxCsvColumns: 1024,
   timeoutMs: 10_000,
   maxConcurrent: 1,
+  maxQueue: 16,
 };
 
 const CSV = 'name,age\r\nAnn,30\r\n';
@@ -154,10 +155,11 @@ describe('MultipartUploadPipe', () => {
       expect(upload).toMatchObject({
         ok: true,
         targetFormat: ConversionFormat.JSON,
-        received: { sourceFormat: ConversionFormat.CSV, text: CSV },
+        // Read and decoded; the format is settled later, by the conversion.
+        received: { text: CSV, fileName: 'sample.csv' },
         attempt: {
           originalFileName: 'sample.csv',
-          sourceFormat: ConversionFormat.CSV,
+          sourceFormat: null,
           targetFormat: ConversionFormat.JSON,
           inputSizeBytes: Buffer.byteLength(CSV),
           retentionRequested: true,

@@ -18,12 +18,12 @@ import { ConversionRecord } from './entities/conversion-record.entity';
 import { ConversionStoredFile } from './entities/conversion-stored-file.entity';
 import { FormatDetectorService } from '@/modules/conversion/detection/format-detector.service';
 import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
-import { CsvHandler } from './formats/csv.handler';
 import { CONVERSION_LIMITS, FORMAT_HANDLERS } from './formats/format-handler';
-import type { ConversionLimits, FormatHandler } from './formats/format-handler';
-import { JsonHandler } from './formats/json.handler';
-import { XmlHandler } from './formats/xml.handler';
-import { YamlHandler } from './formats/yaml.handler';
+import type { ConversionLimits } from './formats/format-handler';
+import { createFormatHandlers } from './formats/format-handlers';
+import { DOCUMENT_CONVERSION_EXECUTOR } from './pipeline/document-conversion.executor';
+import { WorkerPoolDocumentConversionExecutor } from './pipeline/worker-pool.executor';
+import { InProcessDocumentConversionExecutor } from './pipeline/document-conversion.executor';
 
 @Module({
   imports: [
@@ -48,17 +48,31 @@ import { YamlHandler } from './formats/yaml.handler';
     ConversionRetentionService,
     FormatDetectorService,
     FormatRegistryService,
-    CsvHandler,
-    JsonHandler,
-    XmlHandler,
-    YamlHandler,
     {
-      // The whole extensibility story in one place: a fifth format is one more
-      // entry here and one new file. No existing handler, the controller, the
-      // DTOs, and the discovery endpoint all stay untouched (FR-029).
+      // The same list the worker threads build their registry from, so the
+      // formats advertised and the formats converted cannot drift apart.
       provide: FORMAT_HANDLERS,
-      inject: [CsvHandler, JsonHandler, XmlHandler, YamlHandler],
-      useFactory: (...handlers: FormatHandler[]) => handlers,
+      useFactory: createFormatHandlers,
+    },
+    {
+      // Parsing and serializing run in worker threads: a large document never
+      // blocks the event loop, and the deadline can stop a parse mid-way.
+      provide: DOCUMENT_CONVERSION_EXECUTOR,
+      inject: [
+        ConfigService,
+        CONVERSION_LIMITS,
+        FormatRegistryService,
+        FormatDetectorService,
+      ],
+      useFactory: (
+        config: ConfigService,
+        limits: ConversionLimits,
+        registry: FormatRegistryService,
+        detector: FormatDetectorService,
+      ) =>
+        String(config.get('CONVERSION_USE_WORKER_THREADS')) === 'false'
+          ? new InProcessDocumentConversionExecutor(registry, detector)
+          : new WorkerPoolDocumentConversionExecutor(limits),
     },
     {
       // Resolved once, here, and injected everywhere else. Handlers never read
@@ -87,6 +101,7 @@ import { YamlHandler } from './formats/yaml.handler';
         maxCsvColumns: Number(config.get('CONVERSION_MAX_CSV_COLUMNS')),
         timeoutMs: Number(config.get('CONVERSION_TIMEOUT_MS')),
         maxConcurrent: Number(config.get('CONVERSION_MAX_CONCURRENT')),
+        maxQueue: Number(config.get('CONVERSION_MAX_QUEUE')),
       }),
     },
   ],

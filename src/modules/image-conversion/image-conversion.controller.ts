@@ -16,6 +16,7 @@ import {
   ApiOperation,
   ApiPayloadTooLargeResponse,
   ApiResponse,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
@@ -190,6 +191,12 @@ export class ImageConversionController {
     type: ConversionErrorResponseDto,
   })
   @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+  @ApiServiceUnavailableResponse({
+    description:
+      'Too many conversions are already running or waiting; retry shortly ' +
+      '(`service_busy`).',
+    type: ConversionErrorResponseDto,
+  })
   @ApiResponse({
     status: HttpStatus.INTERNAL_SERVER_ERROR,
     description: 'Unexpected failure.',

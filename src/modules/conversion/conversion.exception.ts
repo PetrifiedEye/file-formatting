@@ -152,6 +152,12 @@ export const CONVERSION_ERROR_DEFINITIONS: Record<
     message: (params) =>
       `Conversion exceeded the time budget of ${params.limit} ms`,
   },
+  [ConversionErrorCode.SERVICE_BUSY]: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    category: ConversionErrorCategory.SERVICE_BUSY,
+    message: () =>
+      'Too many conversions are in progress; try again in a moment',
+  },
   [ConversionErrorCode.INPUT_TOO_LARGE]: {
     status: HttpStatus.PAYLOAD_TOO_LARGE,
     category: ConversionErrorCategory.PAYLOAD_TOO_LARGE,
@@ -174,7 +180,7 @@ export const CONVERSION_ERROR_DEFINITIONS: Record<
     message: () => 'Conversion failed',
   },
 
-  // Image conversion (feature 011). The categories are the existing seven —
+  // Image conversion (feature 011). The categories are the shared ones —
   // one column, one vocabulary — so an image failure is reportable alongside a
   // text one without either feature learning about the other.
   [ConversionErrorCode.IMAGE_INVALID]: {
@@ -232,6 +238,7 @@ const STATUS_REASONS: Partial<Record<HttpStatus, string>> = {
   [HttpStatus.PAYLOAD_TOO_LARGE]: 'Payload Too Large',
   [HttpStatus.UNSUPPORTED_MEDIA_TYPE]: 'Unsupported Media Type',
   [HttpStatus.INTERNAL_SERVER_ERROR]: 'Internal Server Error',
+  [HttpStatus.SERVICE_UNAVAILABLE]: 'Service Unavailable',
 };
 
 export interface ConversionErrorBody {

@@ -1144,6 +1144,7 @@ describe('Image Conversion (e2e)', () => {
         '415',
         '429',
         '500',
+        '503',
       ]);
       expect(Object.keys(formats().responses).sort()).toEqual([
         '200',
@@ -1191,7 +1192,7 @@ describe('Image Conversion (e2e)', () => {
     });
 
     it('describes every error body with the shared envelope', () => {
-      for (const status of ['400', '413', '415', '500']) {
+      for (const status of ['400', '413', '415', '500', '503']) {
         expect(
           convert().responses[status].content!['application/json'].schema.$ref,
         ).toContain('ConversionErrorResponseDto');

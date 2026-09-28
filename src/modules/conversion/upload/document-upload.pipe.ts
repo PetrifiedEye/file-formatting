@@ -33,17 +33,14 @@ export class DocumentUploadPipe extends MultipartUploadPipe<
     return this.registry.handlerFor(format) !== undefined;
   }
 
-  protected async receive(
+  /**
+   * Reads and decodes the file. Its format is settled later, by the
+   * conversion's detection parse, which records it on the attempt then.
+   */
+  protected receive(
     reader: UploadReader,
     attempt: UploadAttempt<ConversionFormat>,
   ): Promise<ReceivedUpload> {
-    const received = await this.conversion.receive(
-      reader,
-      attempt.originalFileName,
-    );
-
-    attempt.sourceFormat = received.sourceFormat;
-
-    return received;
+    return this.conversion.receive(reader, attempt.originalFileName);
   }
 }

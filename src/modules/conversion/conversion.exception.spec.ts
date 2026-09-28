@@ -33,6 +33,7 @@ const DOCUMENTED: [string, HttpStatus, ConversionErrorCategory][] = [
   ],
   ['output_too_large', 400, ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED],
   ['timeout', 400, ConversionErrorCategory.TIMEOUT],
+  ['service_busy', 503, ConversionErrorCategory.SERVICE_BUSY],
   ['input_too_large', 413, ConversionErrorCategory.PAYLOAD_TOO_LARGE],
   [
     'unsupported_source_format',

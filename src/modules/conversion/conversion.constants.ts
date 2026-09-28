@@ -25,6 +25,7 @@ export const ConversionErrorCode = {
   CSV_TOO_MANY_COLUMNS: 'csv_too_many_columns',
   OUTPUT_TOO_LARGE: 'output_too_large',
   TIMEOUT: 'timeout',
+  SERVICE_BUSY: 'service_busy',
   INPUT_TOO_LARGE: 'input_too_large',
   UNSUPPORTED_SOURCE_FORMAT: 'unsupported_source_format',
   UNSUPPORTED_TARGET_FORMAT: 'unsupported_target_format',

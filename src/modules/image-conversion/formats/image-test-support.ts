@@ -39,6 +39,7 @@ export const TEST_LIMITS: ImageConversionLimits = {
   jpegQuality: 85,
   timeoutMs: 30000,
   maxConcurrent: 2,
+  maxQueue: 16,
   svgFontDir: null,
 };
 

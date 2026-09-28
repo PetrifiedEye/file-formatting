@@ -30,6 +30,7 @@ const limits: ConversionLimits = {
   maxCsvColumns: 1024,
   timeoutMs: 10_000,
   maxConcurrent: 4,
+  maxQueue: 16,
 };
 
 const CSV = 'name,age\r\nAnn,30\r\n';

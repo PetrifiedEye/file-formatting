@@ -272,6 +272,39 @@ plus the applicable limit, never the file.
 why a 413's row shows the point at which the budget was exceeded rather than
 the size of the file the caller tried to send.
 
+Where each limit is applied: the most-permissive-candidate budget while the
+request body is read (`DocumentUploadPipe`), the detected format's own budget
+in the conversion, once detection has settled the format. A request both over
+its detected format's budget _and_ missing `targetFormat` is therefore answered
+400 unless it is also over every candidate's budget, in which case the read
+itself stops it with 413.
+
+## Worker threads, the deadline and the concurrency bound
+
+Detection, parsing, the structural guard and serialization run on a worker
+thread (`pipeline/`, via Piscina), not on the event loop:
+
+- a 5 MiB `JSON.parse` no longer delays every unrelated request while it runs
+  (SC-008: ten concurrent 1 MiB conversions leave `/health` within ~10 ms);
+- the deadline (`CONVERSION_TIMEOUT_MS`) can stop a parse already in
+  progress — aborting the task stops its worker — instead of only being
+  checked between stages.
+
+Detection's confirming parse is the parse: its model is converted directly, so
+a document is parsed once, and that happens under the deadline and the
+concurrency bound rather than before either applies.
+
+A `ConcurrencyLimiter` admits `CONVERSION_MAX_CONCURRENT` conversions at once
+(one worker thread each), queues up to `CONVERSION_MAX_QUEUE` more — a waiter
+whose deadline passes leaves the queue at once — and refuses the rest with 503
+`service_busy`, recorded in history like any other refusal.
+`CONVERSION_USE_WORKER_THREADS=false` runs the same pipeline on the main thread
+as an escape hatch.
+
+The worker builds its registry from `formats/format-handlers.ts`, the same
+list the module registers, so the formats advertised and the formats converted
+cannot drift apart.
+
 ## Reading the request
 
 `POST /api/convert` and `POST /api/images/convert` read their multipart body in
@@ -292,7 +325,7 @@ conversion, and the attempt's clock starts when the pipe began reading.
 
 ## Adding a fifth format (SC-009)
 
-Adding TOML is one new file and one provider entry. Nothing below is edited:
+Adding TOML is one new file and one list entry. Nothing below is edited:
 no existing handler, `conversion.controller.ts`, any DTO, or the discovery
 endpoint — and the eight new directions appear in `GET /api/convert/formats`
 on their own, because that list is derived from the registry rather than
@@ -327,8 +360,9 @@ written down (FR-029, FR-030).
    }
    ```
 
-3. Add it to `conversion.module.ts` — as a provider, and in the
-   `FORMAT_HANDLERS` factory's `inject` list.
+3. Add `new TomlHandler()` to `createFormatHandlers()` in
+   `formats/format-handlers.ts` — the one list both the module and the
+   conversion worker threads build their registry from.
 
 4. Add `CONVERSION_MAX_BYTES_TOML` to the config surface. Until it exists the
    registry falls back to the smallest configured limit, so the new format is

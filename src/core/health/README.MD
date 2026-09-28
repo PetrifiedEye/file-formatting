@@ -6,10 +6,10 @@ The Health module provides a health check endpoint at `GET /health`
 
 The health check is controlled by the `HEALTH_CHECK_ENABLED` environment variable:
 
-| Value   | Behavior                                         |
-| ------- | ------------------------------------------------ |
-| `true`  | Full health check is performed                   |
-| `false` | Returns an empty response (default)              |
+| Value   | Behavior                            |
+| ------- | ----------------------------------- |
+| `true`  | Full health check is performed      |
+| `false` | Returns an empty response (default) |
 
 Add to your `.env` file:
 

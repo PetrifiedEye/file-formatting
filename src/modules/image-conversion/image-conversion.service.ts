@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
+import { ConcurrencyLimiter } from '@/core/concurrency/concurrency-limiter';
 import { ConversionErrorCode } from '@/modules/conversion/conversion.constants';
 import {
   ImageFormat,
@@ -9,6 +10,11 @@ import {
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
 import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
+import {
+  acquireConversionSlot,
+  startDeadline,
+} from '@/modules/conversion/pipeline/conversion-deadline';
+import type { Deadline } from '@/modules/conversion/pipeline/conversion-deadline';
 import type {
   CollectedUpload,
   UploadAttempt,
@@ -57,15 +63,16 @@ export class ImageConversionService {
   private readonly logger = new Logger(ImageConversionService.name);
 
   /**
-   * Bounds how many conversions hold a decoded raster at once.
+   * Bounds how many conversions hold a decoded raster at once, and how many
+   * may wait; past the queue a request is refused with `service_busy`.
    *
-   * A **separate** counter from the text pipeline's, deliberately: sharing one
+   * A **separate** limiter from the text pipeline's, deliberately: sharing one
    * would let a burst of document conversions starve image conversions of
-   * slots, and the two have unrelated memory profiles. Peak raster memory here
-   * is `maxPixels × 4 bytes × maxConcurrent`.
+   * slots, and the two have unrelated memory profiles. No worker thread is
+   * needed here: sharp and resvg's `renderAsync` already run on the libuv
+   * threadpool, off the event loop.
    */
-  private active = 0;
-  private readonly waiting: (() => void)[] = [];
+  private readonly limiter: ConcurrencyLimiter;
 
   constructor(
     private readonly registry: ImageFormatRegistryService,
@@ -74,7 +81,12 @@ export class ImageConversionService {
     private readonly retention: ConversionRetentionService,
     @Inject(IMAGE_CONVERSION_LIMITS)
     private readonly limits: ImageConversionLimits,
-  ) {}
+  ) {
+    this.limiter = new ConcurrencyLimiter(
+      limits.maxConcurrent,
+      limits.maxQueue,
+    );
+  }
 
   /** For the discovery route, so the controller reads one source of truth. */
   describeFormats() {
@@ -233,46 +245,22 @@ export class ImageConversionService {
     received: ReceivedImage,
     targetFormat: ImageFormat,
   ): Promise<ImageConversionResult> {
-    const deadline = this.startDeadline();
+    // The time budget, taken once the upload is complete (FR-022). Waiters
+    // are subject to it too: queueing behind other conversions must not buy
+    // a request extra time, and an expired waiter leaves the queue at once.
+    const deadline = startDeadline(this.limits.timeoutMs);
 
     try {
-      // Waiters are subject to the same deadline: queueing behind other
-      // conversions must not buy a request extra time.
-      await this.acquire(deadline);
+      const release = await acquireConversionSlot(this.limiter, deadline);
 
       try {
         return await this.runPipeline(received, targetFormat, deadline);
       } finally {
-        this.release();
+        release();
       }
     } finally {
       deadline.dispose();
     }
-  }
-
-  private async acquire(deadline: Deadline): Promise<void> {
-    if (this.active < this.limits.maxConcurrent) {
-      this.active += 1;
-      return;
-    }
-
-    await new Promise<void>((resolve) => this.waiting.push(resolve));
-    this.active += 1;
-
-    try {
-      deadline.check();
-    } catch (error) {
-      // The slot was taken the moment the waiter resumed, so it has to be
-      // handed on here — otherwise a queue of already-expired requests would
-      // consume the pool one slot at a time and never give any back.
-      this.release();
-      throw error;
-    }
-  }
-
-  private release(): void {
-    this.active -= 1;
-    this.waiting.shift()?.();
   }
 
   private async runPipeline(
@@ -344,12 +332,10 @@ export class ImageConversionService {
         throw error;
       }
 
-      // `check` throws the timeout if the budget is genuinely spent; if it is
-      // not, the failure was something else and is re-raised unchanged.
+      // The deadline aborts with the `timeout` refusal as its reason; if it
+      // has not fired, the failure was something else and is re-raised.
       if (deadline.signal.aborted) {
-        throw new ConversionException(ConversionErrorCode.TIMEOUT, {
-          limit: this.limits.timeoutMs,
-        });
+        throw deadline.signal.reason;
       }
 
       throw error;
@@ -390,37 +376,4 @@ export class ImageConversionService {
       this.logger.warn(line);
     }
   }
-
-  /**
-   * The time budget, taken once the upload is complete (FR-022).
-   *
-   * Genuinely enforceable here, unlike the text pipeline's: sharp's work runs
-   * on the libuv threadpool rather than the event loop, so the deadline is
-   * checked between decode and encode and unrelated requests keep being
-   * served. The one caveat is a synchronous SVG render, where the
-   * output-dimension cap is the operative bound.
-   */
-  private startDeadline(): Deadline {
-    const controller = new AbortController();
-    const expiresAt = Date.now() + this.limits.timeoutMs;
-    const timer = setTimeout(() => controller.abort(), this.limits.timeoutMs);
-
-    return {
-      signal: controller.signal,
-      check: () => {
-        if (Date.now() >= expiresAt) {
-          throw new ConversionException(ConversionErrorCode.TIMEOUT, {
-            limit: this.limits.timeoutMs,
-          });
-        }
-      },
-      dispose: () => clearTimeout(timer),
-    };
-  }
-}
-
-interface Deadline {
-  signal: AbortSignal;
-  check: () => void;
-  dispose: () => void;
 }

@@ -17,6 +17,7 @@ const limits: ConversionLimits = {
   maxCsvColumns: 1024,
   timeoutMs: 10_000,
   maxConcurrent: 4,
+  maxQueue: 16,
 };
 
 describe('CsvHandler', () => {

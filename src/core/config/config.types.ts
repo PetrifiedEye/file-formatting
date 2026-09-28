@@ -99,13 +99,26 @@ export interface Config {
   CONVERSION_TIMEOUT_MS?: number;
 
   /**
-   * How many conversions may hold a parsed document in memory at once.
-   *
-   * This bounds **memory, not latency**: Node runs one synchronous parse at a
-   * time regardless. What it prevents is N concurrent uploads each holding an
-   * input buffer and its expanded model.
+   * How many document conversions run at once — and so how many worker
+   * threads parse and serialize. Bounds both memory (each holds an input and
+   * its expanded model) and CPU.
    */
   CONVERSION_MAX_CONCURRENT?: number;
+
+  /**
+   * How many further conversions may wait for a slot. Past this a request is
+   * refused at once with 503 `service_busy` instead of joining a backlog it
+   * would time out in.
+   */
+  CONVERSION_MAX_QUEUE?: number;
+
+  /**
+   * Parse and serialize in worker threads (default), so a large document
+   * never blocks the event loop and the deadline can interrupt a parse that
+   * is already running. `false` runs them on the main thread — an escape
+   * hatch, not a mode to run in.
+   */
+  CONVERSION_USE_WORKER_THREADS?: boolean;
 
   /**
    * Root for retained conversion results. Deliberately NOT `ASSETS_DIR`, which
@@ -165,6 +178,9 @@ export interface Config {
    * relative to its upload than a parsed document's is.
    */
   IMAGE_MAX_CONCURRENT?: number;
+
+  /** How many further image conversions may wait; past this, 503. */
+  IMAGE_MAX_QUEUE?: number;
 
   /**
    * Fonts available to SVG rasterisation. Empty means no fonts at all and no

@@ -64,6 +64,8 @@ export enum ConversionErrorCategory {
   STRUCTURE_LIMIT_EXCEEDED = 'structure_limit_exceeded',
   /** 400: the conversion exceeded its time budget. */
   TIMEOUT = 'timeout',
+  /** 503: too many conversions already running or waiting; retry later. */
+  SERVICE_BUSY = 'service_busy',
   /** 500: an unexpected failure. */
   INTERNAL_ERROR = 'internal_error',
 }

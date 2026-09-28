@@ -46,14 +46,15 @@ function oneMiBJson(): Buffer {
  * idle and merely noisy on a shared CI runner. Keeping them out of the default
  * run is the difference between a measurement and a flaky test.
  *
- * Last measured (2026-09-15, local):
- *   SC-002  1 MiB JSON -> YAML 394ms, -> CSV 76ms, -> XML 72ms   (limit 5000ms)
- *   SC-008  10 concurrent 1 MiB conversions in 3524ms, all 200;
- *           unrelated /health worst case 694ms vs 3ms idle       (limit 1000ms)
+ * Last measured (2026-09-28, local), with parsing on worker threads:
+ *   SC-002  1 MiB JSON -> YAML 192ms, -> CSV 67ms, -> XML 88ms   (limit 5000ms)
+ *   SC-008  10 concurrent 1 MiB conversions in 850ms, all 200;
+ *           unrelated /health worst case 10ms vs 3ms idle        (limit 1000ms)
  *
- * Both hold, so the `worker_threads` contingency in research.md §11 is not
- * needed. If SC-008 starts failing, that is the fix: move `read`/`write` into
- * a pool behind the unchanged `FormatHandler` interface.
+ * Before the worker pool (2026-09-15, main thread): SC-008 took 3524ms and
+ * /health's worst case under load was 694ms — within the limit, but only
+ * because the per-format byte caps kept each synchronous parse short. The
+ * `worker_threads` contingency of research.md §11 is now what runs.
  */
 const describePerf =
   process.env.RUN_PERF_TESTS === 'true' ? describe : describe.skip;

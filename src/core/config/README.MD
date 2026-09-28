@@ -15,8 +15,8 @@ export class MyService {
   constructor(private readonly config: ConfigService) {}
 
   someMethod() {
-    const port = this.config.get('PORT');      // Type-safe, autocomplete works
-    const env = this.config.get('NODE_ENV');   // Returns 'development' | 'production'
+    const port = this.config.get('PORT'); // Type-safe, autocomplete works
+    const env = this.config.get('NODE_ENV'); // Returns 'development' | 'production'
   }
 }
 ```
@@ -29,7 +29,7 @@ export class MyService {
 export interface Config {
   PORT: number;
   NODE_ENV: 'development' | 'production';
-  DATABASE_URL: string;  // Add new option here
+  DATABASE_URL: string; // Add new option here
 }
 ```
 
@@ -39,7 +39,7 @@ export interface Config {
 export const configValidationSchema = Joi.object<Config>({
   PORT: Joi.number().port().required(),
   NODE_ENV: Joi.string().valid('development', 'production').required(),
-  DATABASE_URL: Joi.string().uri().required(),  // Add validation here
+  DATABASE_URL: Joi.string().uri().required(), // Add validation here
 });
 ```
 
