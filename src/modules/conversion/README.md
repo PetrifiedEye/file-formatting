@@ -16,7 +16,10 @@ pins it.
 
 ```ts
 type DocumentNode =
-  | null | boolean | number | string
+  | null
+  | boolean
+  | number
+  | string
   | DocumentNode[]
   | { [key: string]: DocumentNode };
 ```
@@ -85,7 +88,7 @@ Cid,41,extra
    FR-009 forbids silently dropping data.
 
 ```json
-[ { "id": 1, "user": { "name": "Ann" }, "tags": ["a", "b"] } ]
+[{ "id": 1, "user": { "name": "Ann" }, "tags": ["a", "b"] }]
 ```
 
 ```csv
@@ -114,7 +117,7 @@ nobody expects `CSV → JSON → CSV → JSON` to restore a `null`.
    - otherwise an **object**: child elements under their names, attributes
      under `@_<name>`, and any non-whitespace text under `#text`.
 5. **Repeated sibling elements** of the same name become an **array**, in
-   document order. A name appearing once is *not* wrapped in an array.
+   document order. A name appearing once is _not_ wrapped in an array.
 6. An empty element (`<a/>` or `<a></a>`) becomes `""`.
 7. Leaf values stay strings — no type inference, for the reason in §1.
 
@@ -175,7 +178,7 @@ explanation, not dropped.
 
 ## 5. JSON → model, model → JSON
 
-Identity in both directions; the model *is* the JSON data model (RFC 8259).
+Identity in both directions; the model _is_ the JSON data model (RFC 8259).
 Output is UTF-8, two-space indented, with a trailing newline. Duplicate keys
 in the input resolve last-wins, as `JSON.parse` does.
 
@@ -212,16 +215,15 @@ only where required for unambiguous re-parsing.
 
 ## Round-trip guarantees
 
-| Round trip | Guarantee |
-|---|---|
-| `CSV → JSON → CSV` | Exact, for rectangular input with a valid header. |
-| `CSV → YAML → CSV` | Exact, same conditions. |
-| `JSON → YAML → JSON` | Exact for core-schema-expressible values. |
-| `JSON → XML → JSON` | Types become strings, single-item arrays become scalars. Documented, not a bug. |
-| `X → CSV → X` | Lossy wherever CSV cannot carry the shape: `null` vs `""`, numbers vs strings, nesting vs flattened paths. |
+| Round trip           | Guarantee                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `CSV → JSON → CSV`   | Exact, for rectangular input with a valid header.                                                          |
+| `CSV → YAML → CSV`   | Exact, same conditions.                                                                                    |
+| `JSON → YAML → JSON` | Exact for core-schema-expressible values.                                                                  |
+| `JSON → XML → JSON`  | Types become strings, single-item arrays become scalars. Documented, not a bug.                            |
+| `X → CSV → X`        | Lossy wherever CSV cannot carry the shape: `null` vs `""`, numbers vs strings, nesting vs flattened paths. |
 
 SC-001 is measured against the first three rows.
-
 
 ---
 
@@ -242,7 +244,7 @@ The source format is decided by content; the file name is a secondary hint
   truncated `data.json`, and likewise for a `.yaml` file whose aliases blow the
   expansion cap. If the name claimed nothing (or named a format that never even
   sniffed), the answer is `415 unsupported_source_format`: we genuinely could
-  not tell what it was. This only decides what is *reported*; it never changes
+  not tell what it was. This only decides what is _reported_; it never changes
   a detection that succeeded.
 - The file name only ever **widens** what a handler will consider, never
   narrows it, and never reorders the scan. A `.csv` file holding JSON is
@@ -293,11 +295,17 @@ written down (FR-029, FR-030).
      readonly detectionPriority = 35; // between YAML and CSV
      readonly sniffIsConclusive = false;
 
-     sniff(prefix: string, namedByFileName: boolean): boolean { /* … */ }
+     sniff(prefix: string, namedByFileName: boolean): boolean {
+       /* … */
+     }
 
-     async read(input: string): Promise<DocumentNode> { /* … */ }
+     async read(input: string): Promise<DocumentNode> {
+       /* … */
+     }
 
-     async write(node: DocumentNode): Promise<Buffer> { /* … */ }
+     async write(node: DocumentNode): Promise<Buffer> {
+       /* … */
+     }
    }
    ```
 

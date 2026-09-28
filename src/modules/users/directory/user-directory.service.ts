@@ -1,10 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
-import { isUUID } from 'class-validator';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 
 import { ConfigService } from '@/core/config/config.service';
+import { isUuid } from '@/core/validation/joi-fields';
 
 import {
   ListUsersQueryDto,
@@ -130,7 +130,7 @@ export class UserDirectoryService {
     // ILIKE on text is case-insensitive too, so the results are unchanged.
     // Spelled `CAST(... AS text)` because `user.email::text` confuses the query
     // builder's alias resolution.
-    if (isUUID(search)) {
+    if (isUuid(search)) {
       qb.andWhere(
         '(CAST(user.email AS text) ILIKE :searchTerm ESCAPE :escapeChar OR user.id = :searchId)',
         { searchTerm: `%${escaped}%`, escapeChar: '\\', searchId: search },

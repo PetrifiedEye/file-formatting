@@ -47,7 +47,7 @@ Every feature is a NestJS module with a controller and service(s):
 
 - **Controllers** — HTTP only: routing, DTO binding, response shaping, Swagger decorators, rate limiting
 - **Services** — business logic, repositories, orchestration
-- **DTOs** — request/response classes with `class-validator` decorators and `@nestjs/swagger` `ApiProperty`
+- **DTOs** — request/response classes: a Joi schema attached with `@JoiSchema(...)` plus `@nestjs/swagger` `ApiProperty` for the docs
 - **Entities** — TypeORM entities in `entities/` subdirectories
 
 Group a module's files by sub-feature once it outgrows a flat folder. The module root keeps
@@ -77,7 +77,10 @@ nest generate service <name>
 
 ### Validation and config
 
-- Request DTOs use `class-validator`; global `ValidationPipe` has `whitelist: true`
+- Joi is the only validation library. Request DTOs attach a schema with `@JoiSchema(...)` (`src/core/validation/`); the global `JoiValidationPipe` validates them, strips unknown keys and returns the converted value
+  - Reuse fragments from `src/core/validation/joi-fields.ts` (`emailField`, `uuidField`, `pageLimitField`, …)
+  - JSON-body numbers and booleans use `.strict()` so `"true"`/`"5"` are not coerced; query-string numbers are converted
+  - Multipart fields never reach the pipe: validate them with `validateWithSchema(...)`
 - Environment config is validated via Joi in `ConfigModule` at startup
 - CORS origins come from environment variables — never hard-code production origins
 
@@ -112,6 +115,7 @@ Use these files as reference when adding new code:
 | Controller + Swagger + Throttle | `src/modules/auth/auth.controller.ts` |
 | Module wiring | `src/modules/auth/auth.module.ts` |
 | Request DTO | `src/modules/auth/dto/register-request.dto.ts` |
+| Query DTO (pagination) | `src/modules/users/dto/list-users-query.dto.ts` |
 | Global config validation | `src/core/config/config.module.ts` |
 | Email template (React Email) | `src/core/email/templates/verification-email.tsx` |
 | App bootstrap (Fastify) | `src/main.ts`, `src/core/bootstrap/configure-app.ts` |

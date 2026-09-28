@@ -1,14 +1,21 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsString, MinLength } from 'class-validator';
+import Joi from 'joi';
 
+import { JoiSchema } from '@/core/validation/joi-schema.decorator';
+import { emailField } from '@/core/validation/joi-fields';
 import {
   BCRYPT_MAX_PASSWORD_BYTES,
-  MaxPasswordBytes,
-} from '../validators/max-password-bytes.validator';
+  passwordField,
+} from '../validators/password-field';
 
+const registerRequestDtoSchema = Joi.object<RegisterRequestDto>({
+  email: emailField().required(),
+  password: passwordField().required(),
+});
+
+@JoiSchema(registerRequestDtoSchema)
 export class RegisterRequestDto {
   @ApiProperty({ example: 'guest@example.com' })
-  @IsEmail()
   email!: string;
 
   @ApiProperty({
@@ -16,8 +23,5 @@ export class RegisterRequestDto {
     maxLength: BCRYPT_MAX_PASSWORD_BYTES,
     example: 'securepass',
   })
-  @IsString()
-  @MinLength(8)
-  @MaxPasswordBytes()
   password!: string;
 }

@@ -1,8 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
 import { Readable } from 'stream';
 
+import { validateWithSchema } from '@/core/validation/joi-validation';
 import { ConversionErrorCode } from '@/modules/conversion/conversion.constants';
 import {
   ImageFormat,
@@ -14,7 +13,10 @@ import { ConversionHistoryService } from '@/modules/conversion/history/conversio
 import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
 import { UploadReader } from '@/modules/conversion/upload-reader';
 
-import { ConvertImageRequestDto } from './dto/convert-image-request.dto';
+import {
+  ConvertImageRequestDto,
+  convertImageRequestDtoSchema,
+} from './dto/convert-image-request.dto';
 import { IMAGE_CONVERSION_LIMITS } from './formats/image-format-handler';
 import type { ImageConversionLimits } from './formats/image-format-handler';
 import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
@@ -263,7 +265,7 @@ export class ImageConversionService {
       throw this.translateMultipartError(error);
     }
 
-    const validated = await this.validateFields(fields);
+    const validated = this.validateFields(fields);
 
     state.targetFormat = validated.targetFormat;
     state.retentionRequested = validated.store === 'true';
@@ -401,27 +403,29 @@ export class ImageConversionService {
   /**
    * Validate the non-file parts explicitly.
    *
-   * The global `ValidationPipe` never sees a multipart body, so the DTO is
+   * The global validation pipe never sees a multipart body, so the DTO is
    * applied by hand here rather than being quietly skipped. Each field has its
    * own code so a caller can tell the refusals apart.
    */
-  private async validateFields(
+  private validateFields(
     fields: Record<string, string>,
-  ): Promise<ConvertImageRequestDto> {
+  ): ConvertImageRequestDto {
     if (fields.targetFormat === undefined) {
       throw new ConversionException(ConversionErrorCode.MISSING_TARGET_FORMAT);
     }
 
-    const dto = plainToInstance(ConvertImageRequestDto, fields);
-    const failures = await validate(dto, { whitelist: true });
+    const result = validateWithSchema(convertImageRequestDtoSchema, fields);
 
-    for (const failure of failures) {
+    if (!result.ok) {
+      // Each field has its own code so the caller can tell the refusals apart.
       throw new ConversionException(
-        failure.property === 'store'
+        result.failedKeys[0] === 'store'
           ? ConversionErrorCode.INVALID_STORE_FLAG
           : ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
       );
     }
+
+    const dto = result.value;
 
     // A format may be spelled correctly and still have no handler registered.
     if (!this.registry.handlerFor(dto.targetFormat)) {

@@ -1,7 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsIn, IsOptional } from 'class-validator';
+import Joi from 'joi';
 
 import { ImageFormat } from '@/modules/conversion/conversion.enums';
+
+import { JoiSchema } from '@/core/validation/joi-schema.decorator';
+import { multipartFlagField } from '@/core/validation/joi-fields';
+
+/**
+ * Validated by hand against the multipart fields: the global pipe never sees
+ * a multipart body.
+ */
+export const convertImageRequestDtoSchema = Joi.object<ConvertImageRequestDto>({
+  targetFormat: Joi.string()
+    .valid(...Object.values(ImageFormat))
+    .required(),
+  store: multipartFlagField(),
+});
 
 /**
  * The non-file parts of a conversion request.
@@ -14,6 +28,7 @@ import { ImageFormat } from '@/modules/conversion/conversion.enums';
  * rather than a boolean: coercing here would turn every unrecognised value
  * into `false` and lose the `invalid_store_flag` refusal.
  */
+@JoiSchema(convertImageRequestDtoSchema)
 export class ConvertImageRequestDto {
   @ApiProperty({
     enum: ImageFormat,
@@ -21,7 +36,6 @@ export class ConvertImageRequestDto {
       'The format to produce. `svg` is a real format and an accepted ' +
       'value, but no direction produces it, so it is always refused.',
   })
-  @IsEnum(ImageFormat)
   targetFormat!: ImageFormat;
 
   @ApiPropertyOptional({
@@ -29,7 +43,5 @@ export class ConvertImageRequestDto {
     default: 'false',
     description: 'Keep the converted image in application storage.',
   })
-  @IsOptional()
-  @IsIn(['true', 'false'])
   store?: 'true' | 'false';
 }

@@ -1,4 +1,4 @@
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import compression from '@fastify/compress';
 import helmet from '@fastify/helmet';
@@ -9,6 +9,7 @@ import { resolve } from 'path';
 
 import { resolveCorsOrigins } from '@/core/bootstrap/bootstrap.options';
 import { ConfigService } from '@/core/config/config.service';
+import { JoiValidationPipe } from '@/core/validation/joi-validation.pipe';
 
 /**
  * Everything the HTTP surface depends on besides the module graph: plugins,
@@ -53,11 +54,7 @@ export async function configureApp(app: NestFastifyApplication): Promise<void> {
     hsts: nodeEnv === 'production',
   });
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-    }),
-  );
+  app.useGlobalPipes(new JoiValidationPipe());
 
   const cors = resolveCorsOrigins(configService.get('CORS_ORIGINS'), nodeEnv);
 

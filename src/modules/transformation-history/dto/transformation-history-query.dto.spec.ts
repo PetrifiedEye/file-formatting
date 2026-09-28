@@ -1,6 +1,5 @@
-import { plainToInstance } from 'class-transformer';
-import { validateSync } from 'class-validator';
-
+import { getJoiSchema } from '@/core/validation/joi-schema.decorator';
+import { validateWithSchema } from '@/core/validation/joi-validation';
 import {
   ConversionFormat,
   ImageFormat,
@@ -11,15 +10,20 @@ import { TransformationHistoryStatus } from '../transformation-history.enums';
 import { TransformationHistoryQueryDto } from './transformation-history-query.dto';
 
 /**
- * The global ValidationPipe runs with `whitelist: true`, so these are the
- * checks that turn a bad query string into a 400 before the handler is
+ * The global `JoiValidationPipe` applies this schema to the query string, so
+ * these are the checks that turn a bad query into a 400 before the handler is
  * reached (FR-011).
  */
+function validate(query: Record<string, unknown>) {
+  return validateWithSchema(
+    getJoiSchema(TransformationHistoryQueryDto)!,
+    query,
+  );
+}
+
 function failingProperties(query: Record<string, unknown>): string[] {
-  const dto = plainToInstance(TransformationHistoryQueryDto, query, {
-    enableImplicitConversion: false,
-  });
-  return validateSync(dto, { whitelist: true }).map((error) => error.property);
+  const result = validate(query);
+  return result.ok ? [] : result.failedKeys;
 }
 
 describe('TransformationHistoryQueryDto', () => {
@@ -42,7 +46,21 @@ describe('TransformationHistoryQueryDto', () => {
     ).toEqual([]);
   });
 
+  it('drops options it does not know', () => {
+    const result = validate({ limit: '5', extra: 'x' });
+
+    expect(result).toEqual({ ok: true, value: { limit: 5 } });
+  });
+
   describe('limit', () => {
+    it('converts the query-string value to a number', () => {
+      // The service computes `limit + 1`; a string would concatenate.
+      expect(validate({ limit: '50' })).toEqual({
+        ok: true,
+        value: { limit: 50 },
+      });
+    });
+
     it.each([['0'], ['101'], ['500'], ['-1'], ['abc'], ['1.5']])(
       'rejects %s',
       (limit) => {

@@ -8,8 +8,6 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
 import {
   ApiBadRequestResponse,
   ApiBody,
@@ -31,6 +29,7 @@ import {
   JwtAuthGuard,
   RequestUser,
 } from '@/modules/auth/guards/jwt-auth.guard';
+import { validateWithSchema } from '@/core/validation/joi-validation';
 
 import {
   CONVERTED_FILE_BASE_NAME,
@@ -48,7 +47,10 @@ import type {
   ReceivedUpload,
 } from './conversion.service';
 import { ConversionErrorResponseDto } from './dto/conversion-error-response.dto';
-import { ConvertRequestDto } from './dto/convert-request.dto';
+import {
+  ConvertRequestDto,
+  convertRequestDtoSchema,
+} from './dto/convert-request.dto';
 import { SupportedFormatsResponseDto } from './dto/supported-formats-response.dto';
 import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
 import { UploadReader } from './upload-reader';
@@ -206,7 +208,7 @@ export class ConversionController {
       request.user.id,
       async (state) => {
         const collected = await this.collectParts(request, state);
-        const fields = await this.validateFields(collected.fields);
+        const fields = this.validateFields(collected.fields);
 
         state.targetFormat = fields.targetFormat;
         state.retentionRequested = fields.store === 'true';
@@ -309,27 +311,26 @@ export class ConversionController {
   /**
    * Validate the non-file parts explicitly.
    *
-   * The global `ValidationPipe` never sees a multipart body, so the DTO is
+   * The global validation pipe never sees a multipart body, so the DTO is
    * applied by hand here rather than being quietly skipped.
    */
-  private async validateFields(
-    fields: Record<string, string>,
-  ): Promise<ConvertRequestDto> {
+  private validateFields(fields: Record<string, string>): ConvertRequestDto {
     if (fields.targetFormat === undefined) {
       throw new ConversionException(ConversionErrorCode.MISSING_TARGET_FORMAT);
     }
 
-    const dto = plainToInstance(ConvertRequestDto, fields);
-    const failures = await validate(dto, { whitelist: true });
+    const result = validateWithSchema(convertRequestDtoSchema, fields);
 
-    for (const failure of failures) {
+    if (!result.ok) {
       // Each field has its own code so the caller can tell the refusals apart.
       throw new ConversionException(
-        failure.property === 'store'
+        result.failedKeys[0] === 'store'
           ? ConversionErrorCode.INVALID_STORE_FLAG
           : ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
       );
     }
+
+    const dto = result.value;
 
     // A format may be spelled correctly and still have no handler registered.
     if (!this.registry.handlerFor(dto.targetFormat)) {

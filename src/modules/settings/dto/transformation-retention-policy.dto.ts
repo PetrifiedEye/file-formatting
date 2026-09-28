@@ -1,5 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, Max, Min } from 'class-validator';
+import Joi from 'joi';
+
+import { JoiSchema } from '@/core/validation/joi-schema.decorator';
 
 export class TransformationRetentionPolicyResponseDto {
   @ApiProperty({
@@ -12,6 +14,12 @@ export class TransformationRetentionPolicyResponseDto {
   retentionDays!: number;
 }
 
+const updateTransformationRetentionPolicyRequestDtoSchema =
+  Joi.object<UpdateTransformationRetentionPolicyRequestDto>({
+    retentionDays: Joi.number().strict().integer().min(1).max(3650).required(),
+  });
+
+@JoiSchema(updateTransformationRetentionPolicyRequestDtoSchema)
 export class UpdateTransformationRetentionPolicyRequestDto {
   @ApiProperty({
     description:
@@ -20,8 +28,5 @@ export class UpdateTransformationRetentionPolicyRequestDto {
     minimum: 1,
     maximum: 3650,
   })
-  @IsInt()
-  @Min(1)
-  @Max(3650)
   retentionDays!: number;
 }

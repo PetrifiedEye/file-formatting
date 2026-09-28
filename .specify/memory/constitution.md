@@ -31,8 +31,8 @@ and conversion logic.
 
 ### II. Input Validation & Security (NON-NEGOTIABLE)
 
-All external input MUST be validated before use. Request DTOs MUST use `class-validator` decorators
-and pass through the global `ValidationPipe` (`whitelist: true`). Environment and boot-time
+All external input MUST be validated before use. Request DTOs MUST declare a Joi schema with
+`@JoiSchema(...)` and pass through the global `JoiValidationPipe` (unknown keys stripped). Environment and boot-time
 configuration MUST be validated via Joi in `ConfigModule`. CORS MUST allow only trusted domains
 configured via environment variables — hard-coded localhost origins are permitted for local
 development only and MUST NOT ship to production unchanged. Rate limiting via `@nestjs/throttler`
@@ -89,7 +89,7 @@ The backend MUST adhere to the stack established in this repository:
 | Layer | Technology |
 |-------|------------|
 | Framework | NestJS 11 on Fastify (`@nestjs/platform-fastify`) |
-| Validation | `class-validator` / `class-transformer` (runtime), Joi (config) |
+| Validation | Joi (request DTOs via `JoiValidationPipe`, and config) |
 | ORM / DB | TypeORM + PostgreSQL (`pg`) |
 | Transactions | `typeorm-transactional` |
 | Rate limiting | `@nestjs/throttler` |
