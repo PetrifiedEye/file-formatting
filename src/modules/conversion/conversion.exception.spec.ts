@@ -32,6 +32,7 @@ const DOCUMENTED: [string, HttpStatus, ConversionErrorCategory][] = [
     ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED,
   ],
   ['output_too_large', 400, ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED],
+  ['xml_unrepresentable', 400, ConversionErrorCategory.BAD_REQUEST],
   ['timeout', 400, ConversionErrorCategory.TIMEOUT],
   ['service_busy', 503, ConversionErrorCategory.SERVICE_BUSY],
   ['input_too_large', 413, ConversionErrorCategory.PAYLOAD_TOO_LARGE],

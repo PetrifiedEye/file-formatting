@@ -21,6 +21,7 @@ export const ConversionErrorCode = {
   CSV_DUPLICATE_HEADER: 'csv_duplicate_header',
   XML_DOCTYPE_FORBIDDEN: 'xml_doctype_forbidden',
   XML_NAME_COLLISION: 'xml_name_collision',
+  XML_UNREPRESENTABLE: 'xml_unrepresentable',
   STRUCTURE_LIMIT_EXCEEDED: 'structure_limit_exceeded',
   CSV_TOO_MANY_COLUMNS: 'csv_too_many_columns',
   OUTPUT_TOO_LARGE: 'output_too_large',

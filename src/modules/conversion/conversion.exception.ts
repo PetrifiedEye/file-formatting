@@ -126,6 +126,14 @@ export const CONVERSION_ERROR_DEFINITIONS: Record<
     message: () =>
       'Two sibling keys become the same element name once sanitized for XML',
   },
+  // A control character XML 1.0 forbids in any form (not even as a character
+  // reference), or a list or object where XML only has room for text — an
+  // attribute value, say. Refused rather than dropped or stringified (FR-009).
+  [ConversionErrorCode.XML_UNREPRESENTABLE]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.BAD_REQUEST,
+    message: () => 'The document contains a value XML cannot represent',
+  },
   [ConversionErrorCode.STRUCTURE_LIMIT_EXCEEDED]: {
     status: HttpStatus.BAD_REQUEST,
     category: ConversionErrorCategory.STRUCTURE_LIMIT_EXCEEDED,

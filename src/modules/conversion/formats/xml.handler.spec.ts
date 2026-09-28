@@ -1,8 +1,10 @@
 import { ConversionException } from '../conversion.exception';
 import { DocumentNode } from './document-node';
-import { XmlHandler } from './xml.handler';
+import { JsonHandler } from './json.handler';
+import { XML_TYPES_NAMESPACE, XmlHandler } from './xml.handler';
 
 const PROLOG = '<?xml version="1.0" encoding="UTF-8"?>';
+const NS = `xmlns:ff="${XML_TYPES_NAMESPACE}"`;
 
 describe('XmlHandler', () => {
   const handler = new XmlHandler();
@@ -102,9 +104,23 @@ describe('XmlHandler', () => {
       ).resolves.toEqual({ r: { n: '1', t: 'true', z: '01234' } });
     });
 
-    it('does not expand a declared internal entity', async () => {
-      // Belt and braces behind the DOCTYPE refusal: processEntities is off.
-      await expect(read('<a>&amp;lt;</a>')).resolves.toEqual({ a: '&amp;lt;' });
+    it('decodes the predefined entities and character references', async () => {
+      await expect(
+        read('<a v="x&#10;y&quot;">&lt;b&gt; &amp; &#65;&#x42;&apos;</a>'),
+      ).resolves.toEqual({ a: { '@_v': 'x\ny"', '#text': "<b> & AB'" } });
+    });
+
+    it('decodes in one pass, so an escaped reference stays text', async () => {
+      // `&amp;lt;` is the text `&lt;`, not `<`.
+      await expect(read('<a>&amp;lt;&amp;#65;</a>')).resolves.toEqual({
+        a: '&lt;&#65;',
+      });
+    });
+
+    it('refuses a character reference to a non-character', async () => {
+      await expect(read('<a>&#1;</a>')).rejects.toMatchObject({
+        code: 'parse_error',
+      });
     });
 
     it('refuses malformed markup without quoting it (SC-005)', async () => {
@@ -132,15 +148,16 @@ describe('XmlHandler', () => {
       expect(await body({ order: { a: '1' } })).toBe('<order><a>1</a></order>');
     });
 
-    it('falls back to <root> when the root has several keys (§4.2)', async () => {
+    it('falls back to a marked <root> when the root has several keys (§4.2)', async () => {
       expect(await body({ a: '1', b: '2' })).toBe(
-        '<root><a>1</a><b>2</b></root>',
+        `<root ${NS} ff:wrapped="true"><a>1</a><b>2</b></root>`,
       );
     });
 
     it('wraps a root array as <root><item>…</item></root> (§4.3)', async () => {
       expect(await body(['x', 'y'])).toBe(
-        '<root><item>x</item><item>y</item></root>',
+        `<root ${NS} ff:type="array" ff:wrapped="true">` +
+          '<item>x</item><item>y</item></root>',
       );
     });
 
@@ -156,15 +173,25 @@ describe('XmlHandler', () => {
       );
     });
 
-    it('writes scalars as text and null as an empty element (§4.6)', async () => {
-      expect(await body({ r: { n: 1, t: true, z: null } })).toBe(
-        '<r><n>1</n><t>true</t><z/></r>',
+    it('writes scalars as typed text and null as a typed empty element (§4.6)', async () => {
+      expect(await body({ r: { n: 1, t: true, z: null, s: '' } })).toBe(
+        `<r ${NS}><n ff:type="number">1</n><t ff:type="boolean">true</t>` +
+          '<z ff:type="null"/><s/></r>',
       );
     });
 
     it('converts the worked example from the contract exactly (§4)', async () => {
       expect(await body({ items: [1, 2], meta: null })).toBe(
-        '<root><items>1</items><items>2</items><meta/></root>',
+        `<root ${NS} ff:wrapped="true">` +
+          '<items ff:type="number">1</items><items ff:type="number">2</items>' +
+          '<meta ff:type="null"/></root>',
+      );
+    });
+
+    it('writes a document of strings with no hints and no namespace', async () => {
+      // CSV → XML is all strings: its output is exactly what it always was.
+      expect(await body({ r: { a: '1', b: ['x', 'y'] } })).toBe(
+        '<r><a>1</a><b>x</b><b>y</b></r>',
       );
     });
 
@@ -178,6 +205,55 @@ describe('XmlHandler', () => {
       expect(await body({ a: { '@_v': 'x&"<>', '#text': 't' } })).toBe(
         '<a v="x&amp;&quot;&lt;&gt;">t</a>',
       );
+    });
+
+    /**
+     * FINDING 2 of the code review. Attribute-value normalization (§3.3.3)
+     * turns a literal TAB, LF or CR into a space on the way back in, and
+     * end-of-line handling (§2.11) turns a CR in text into LF.
+     */
+    it('writes TAB, LF and CR in attributes, and CR in text, as references', async () => {
+      const node = { r: { '@_note': 'a\tb\nc\rd', '#text': 'e\rf\ng' } };
+      const xml = await body(node);
+
+      expect(xml).toBe('<r note="a&#9;b&#10;c&#13;d">e&#13;f\ng</r>');
+      await expect(read(xml)).resolves.toEqual(node);
+    });
+
+    /**
+     * FINDING 2 of the code review: a NUL is legal in JSON and cannot exist in
+     * XML 1.0 in any form — not even as `&#0;`. Emitting it produced a
+     * document no conforming parser reads; it is refused instead (FR-009).
+     */
+    it.each([
+      ['a NUL', 'x\u0000y'],
+      ['a vertical tab', 'x\u000By'],
+      ['U+FFFF', 'x\uFFFFy'],
+      ['an unpaired surrogate', 'x\uD800y'],
+    ])('refuses %s, which XML cannot carry', async (_label, text) => {
+      await expect(write({ a: text })).rejects.toMatchObject({
+        code: 'xml_unrepresentable',
+      });
+      await expect(write({ a: { '@_v': text } })).rejects.toMatchObject({
+        code: 'xml_unrepresentable',
+      });
+    });
+
+    it('refuses the NUL arriving from JSON, rather than emitting it', async () => {
+      const model = await new JsonHandler().read('{"a":"x\\u0000y"}');
+
+      await expect(handler.write(model)).rejects.toMatchObject({
+        code: 'xml_unrepresentable',
+      });
+    });
+
+    it('refuses a list or object where only text fits (§4.4)', async () => {
+      await expect(write({ a: { '@_v': [1, 2] } })).rejects.toMatchObject({
+        code: 'xml_unrepresentable',
+      });
+      await expect(write({ a: { '#text': { b: 1 } } })).rejects.toMatchObject({
+        code: 'xml_unrepresentable',
+      });
     });
 
     it('sanitizes a key that is not a valid XML Name (§4.8)', async () => {
@@ -221,21 +297,92 @@ describe('XmlHandler', () => {
   });
 
   describe('the single-vs-repeated asymmetry, asserted in both directions', () => {
-    it('loses the one-item list on the way out and back', async () => {
-      const oneItem = { r: { item: ['pen'] } };
-
-      // Written as a single element…
-      expect(await body(oneItem)).toBe('<r><item>pen</item></r>');
-      // …and read back as a scalar. Documented, not a bug.
-      await expect(read(await body(oneItem))).resolves.toEqual({
+    it('reads a single element of someone else s XML as a scalar', async () => {
+      // No hints: a one-item list and a scalar look the same.
+      await expect(read('<r><item>pen</item></r>')).resolves.toEqual({
         r: { item: 'pen' },
       });
     });
 
-    it('keeps a two-item list a list', async () => {
+    it('marks a one-item list it writes, so it comes back a list', async () => {
+      const oneItem = { r: { item: ['pen'] } };
+
+      expect(await body(oneItem)).toBe(
+        `<r ${NS}><item ff:array="true">pen</item></r>`,
+      );
+      await expect(read(await body(oneItem))).resolves.toEqual(oneItem);
+    });
+
+    it('keeps a two-item list a list, with no hint needed', async () => {
       const twoItems = { r: { item: ['pen', 'ink'] } };
 
+      expect(await body(twoItems)).toBe(
+        '<r><item>pen</item><item>ink</item></r>',
+      );
       await expect(read(await body(twoItems))).resolves.toEqual(twoItems);
+    });
+  });
+
+  /** §3.8 / §4.9: what this handler writes, it reads back exactly. */
+  describe('type hints', () => {
+    it.each([
+      [
+        'numbers, booleans, null and leading zeros',
+        { a: 1, b: true, c: null, d: '007', e: -2.5 },
+      ],
+      ['a one-item list', { r: { e: [1] } }],
+      ['an empty list and an empty object', { r: { f: [], g: {} } }],
+      ['lists of lists', { r: { i: [[1, 2], [3], []] } }],
+      ['a list of objects', { r: { j: [{ k: 1 }] } }],
+      ['a root list', [1, 'x', null, { y: false }]],
+      ['a root scalar', 5],
+      ['the empty string', { r: { s: '' } }],
+      ['markup-like text', { r: { t: '<b> & "q"' } }],
+    ])('round-trips %s', async (_label, node: DocumentNode) => {
+      await expect(read(await body(node))).resolves.toEqual(node);
+    });
+
+    it('round-trips JSON through XML without losing a type', async () => {
+      const json = new JsonHandler();
+      const source =
+        '{"a":1,"b":true,"c":null,"d":"007","e":[1],"f":[],"g":{},"h":[[1],[2,3]]}';
+
+      const xml = await handler.write(await json.read(source));
+      const back = await handler.read(xml.toString('utf8'));
+
+      expect(back).toEqual(JSON.parse(source));
+    });
+
+    it('declares the namespace once, on the document element', async () => {
+      const xml = await body({ r: { a: { b: 1 } } });
+
+      expect(xml.match(/xmlns:ff=/g)).toHaveLength(1);
+      expect(xml.startsWith(`<r ${NS}>`)).toBe(true);
+    });
+
+    it('ignores ff: attributes unless the document declares the namespace', async () => {
+      // Someone else's `ff:` prefix — or a hand-written hint — is just an
+      // attribute.
+      await expect(read('<r><n ff:type="number">1</n></r>')).resolves.toEqual({
+        r: { n: { '@_ff:type': 'number', '#text': '1' } },
+      });
+    });
+
+    it('does not let a JSON key spoof a hint', async () => {
+      // `ff:type` is not an XML Name here, so it is sanitized to `ff_type`.
+      const xml = await body({ r: { '@_ff:type': 'null', '#text': 'x' } });
+
+      expect(xml).toBe('<r ff_type="null">x</r>');
+    });
+
+    it.each([
+      ['a number hint over non-numbers', '<n ff:type="number">abc</n>'],
+      ['a boolean hint over other text', '<n ff:type="boolean">yes</n>'],
+      ['a hint it never writes', '<n ff:type="date">2026</n>'],
+    ])('refuses %s', async (_label, element) => {
+      await expect(read(`<r ${NS}>${element}</r>`)).rejects.toMatchObject({
+        code: 'parse_error',
+      });
     });
   });
 

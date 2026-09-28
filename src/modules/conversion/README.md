@@ -119,7 +119,27 @@ nobody expects `CSV → JSON → CSV → JSON` to restore a `null`.
 5. **Repeated sibling elements** of the same name become an **array**, in
    document order. A name appearing once is _not_ wrapped in an array.
 6. An empty element (`<a/>` or `<a></a>`) becomes `""`.
-7. Leaf values stay strings — no type inference, for the reason in §1.
+7. Leaf values stay strings — no type inference: `007`, `1e3` and `true` are
+   as likely to be identifiers as numbers, and guessing would corrupt them.
+8. **Type hints.** When the document element declares
+   `xmlns:ff="urn:file-formatting:xml-types"` — which this service's own
+   output does whenever it needs to (§4.9) — the hints are applied and then
+   removed:
+   - `ff:type="number" | "boolean"` → the text as that type (text that does not
+     fit → `400 parse_error`); `"null"` → `null`; `"object"` → `{}`;
+     `"array"` → a list of the element's `<item>` children (`[]` if none);
+   - `ff:array="true"` → the element is a one-item list;
+   - `ff:wrapped="true"` on the document element → it was invented to hold the
+     document (§4.2), so its value is the whole document.
+
+   Without the namespace declaration, `ff:*` attributes are ordinary
+   attributes: someone else's `ff:` prefix, or a hint typed by hand, changes
+   nothing.
+9. The predefined entities (`&lt;` `&gt;` `&amp;` `&quot;` `&apos;`) and
+   character references (`&#10;`, `&#x41;`) are decoded — in one pass, so
+   `&amp;lt;` is the text `&lt;`. A reference to a non-character (`&#1;`) →
+   `400 parse_error`. No other entity exists: a DOCTYPE is refused (rule 1).
+10. Leading and trailing whitespace of a text value is trimmed.
 
 ```xml
 <order id="7"><item>pen</item><item>ink</item><note>urgent</note></order>
@@ -129,11 +149,12 @@ nobody expects `CSV → JSON → CSV → JSON` to restore a `null`.
 { "order": { "@_id": "7", "item": ["pen", "ink"], "note": "urgent" } }
 ```
 
-**The single-vs-repeated asymmetry is real and deliberate**: a one-item list
-in XML is indistinguishable from a scalar, so `XML → JSON` cannot know it
-was a list. Wrapping every element in an array instead would be equally
-deterministic but would make the common case unusable. The rule is tested
-both ways.
+**The single-vs-repeated asymmetry is real, for XML without hints**: a
+one-item list in plain XML is indistinguishable from a scalar, so `XML → JSON`
+cannot know it was a list. Wrapping every element in an array instead would be
+equally deterministic but would make the common case unusable. This service's
+own output marks one-item lists (§4.9), so its XML reads back exactly. Both
+behaviours are tested.
 
 ## 4. Model → XML
 
@@ -148,9 +169,17 @@ both ways.
    other key becomes a **child element**.
 5. An array value emits its owning key as a **repeated sibling element**,
    once per item — the inverse of §3.5.
-6. Scalars become text (`true`/`false` and JSON number formatting). `null`
-   becomes an **empty element**.
-7. `&`, `<`, `>` are escaped in text; `&`, `<`, `>`, `"` in attribute values.
+6. Scalars become text (`true`/`false` and JSON number formatting); numbers
+   and booleans carry `ff:type` (§4.9). `null` becomes an **empty element**
+   marked `ff:type="null"` — distinct from `""`, which is an unmarked empty
+   element.
+7. `&`, `<`, `>` are escaped in text, and CR as `&#13;`; attribute values also
+   escape `"`, TAB, LF and CR (`&#9;` `&#10;` `&#13;`), which attribute-value
+   normalization would otherwise turn into spaces. A character XML 1.0 cannot
+   carry at all — a C0 control other than TAB/LF/CR (a NUL from JSON, say),
+   U+FFFE/U+FFFF, an unpaired surrogate — → `400 xml_unrepresentable`, as is a
+   list or object under an `@_` or `#text` key: refused, never dropped or
+   stringified.
 8. **Name sanitization**: a key that is not a valid XML Name has each invalid
    character replaced by `_`, and gains a leading `_` if it starts with a
    character that cannot begin a Name. If sanitization makes two sibling keys
@@ -165,16 +194,27 @@ explanation, not dropped.
 `first-name` stays `first-name`. (The spec's illustration of this rule uses
 `user-name`; that particular pair does not actually collide.)
 
+9. **Type hints**, in the namespace `urn:file-formatting:xml-types` (prefix
+   `ff`), declared once on the document element and only when needed — a
+   document of plain strings (anything from CSV) carries none:
+   - `ff:type` on a number, boolean, `null`, `{}` or a list that is itself a
+     value (the document, an empty list, a list inside a list — written as an
+     element whose `<item>` children are its items);
+   - `ff:array="true"` on the single element of a one-item list;
+   - `ff:wrapped="true"` on an invented `<root>`.
+
+   Attribute values are written as text and read back as strings.
+
 ```json
 { "items": [1, 2], "meta": null }
 ```
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<root><items>1</items><items>2</items><meta/></root>
+<root xmlns:ff="urn:file-formatting:xml-types" ff:wrapped="true"><items ff:type="number">1</items><items ff:type="number">2</items><meta ff:type="null"/></root>
 ```
 
-(The root has two keys, so `<root>` wraps it — rule 2.)
+(The root has two keys, so a marked `<root>` wraps it — rule 2.)
 
 ## 5. JSON → model, model → JSON
 
@@ -220,10 +260,13 @@ only where required for unambiguous re-parsing.
 | `CSV → JSON → CSV`   | Exact, for rectangular input with a valid header.                                                          |
 | `CSV → YAML → CSV`   | Exact, same conditions.                                                                                    |
 | `JSON → YAML → JSON` | Exact for core-schema-expressible values.                                                                  |
-| `JSON → XML → JSON`  | Types become strings, single-item arrays become scalars. Documented, not a bug.                            |
+| `JSON → XML → JSON`  | Exact, via the type hints (§4.9) — except attribute (`@_`) values, which come back as strings.             |
 | `X → CSV → X`        | Lossy wherever CSV cannot carry the shape: `null` vs `""`, numbers vs strings, nesting vs flattened paths. |
 
 SC-001 is measured against the first three rows.
+
+`XML → JSON` of XML this service did not write keeps its limits: leaves are
+strings and a single element is not a list (§3.5, §3.7).
 
 ---
 
