@@ -1,9 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import {
@@ -12,6 +8,7 @@ import {
 } from 'typeorm-transactional';
 
 import { AppModule } from '../src/core/app/app.module';
+import { createTestApp } from './support/create-test-app';
 
 describe('Health (e2e)', () => {
   let app: INestApplication<App>;
@@ -24,18 +21,7 @@ describe('Health (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
   });
 
   afterAll(async () => {
@@ -44,5 +30,38 @@ describe('Health (e2e)', () => {
 
   it('/health (GET)', () => {
     return request(baseUrl).get('/health').expect(200);
+  });
+
+  describe('security headers', () => {
+    it('sends the helmet header set on every response', async () => {
+      const response = await request(baseUrl).get('/health').expect(200);
+
+      expect(response.headers).toMatchObject({
+        'x-content-type-options': 'nosniff',
+        'x-frame-options': 'SAMEORIGIN',
+        'cross-origin-resource-policy': 'same-site',
+        'referrer-policy': 'no-referrer',
+      });
+
+      const csp = response.headers['content-security-policy'];
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).toContain("frame-ancestors 'none'");
+      expect(csp).toContain("form-action 'none'");
+    });
+
+    it('sends them on errors too', async () => {
+      const response = await request(baseUrl).get('/no-such-route').expect(404);
+
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['content-security-policy']).toContain(
+        "default-src 'none'",
+      );
+    });
+
+    it('does not send HSTS outside production', async () => {
+      const response = await request(baseUrl).get('/health').expect(200);
+
+      expect(response.headers['strict-transport-security']).toBeUndefined();
+    });
   });
 });

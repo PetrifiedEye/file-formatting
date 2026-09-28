@@ -97,7 +97,8 @@ Use these files as reference when adding new code:
 | Request DTO | `src/modules/auth/dto/register-request.dto.ts` |
 | Global config validation | `src/core/config/config.module.ts` |
 | Email template (React Email) | `src/core/email/templates/verification-email.tsx` |
-| App bootstrap (Fastify) | `src/main.ts` |
+| App bootstrap (Fastify) | `src/main.ts`, `src/core/bootstrap/configure-app.ts` |
+| e2e app setup | `test/support/create-test-app.ts` |
 
 ## References
 

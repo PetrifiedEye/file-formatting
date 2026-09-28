@@ -2,14 +2,9 @@
   "version": "0.15.2",
   "integration_state_schema": 1,
   "installed_integrations": [
-    "cursor-agent",
     "claude"
   ],
   "integration_settings": {
-    "cursor-agent": {
-      "script": "sh",
-      "invoke_separator": "-"
-    },
     "claude": {
       "script": "sh",
       "invoke_separator": "-"

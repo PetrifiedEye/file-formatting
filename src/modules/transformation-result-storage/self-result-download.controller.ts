@@ -20,6 +20,7 @@ import {
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { RouteConfig } from '@nestjs/platform-fastify';
 import { Throttle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
@@ -56,6 +57,10 @@ export class SelfResultDownloadController {
   ) {}
 
   @Get(':itemId/download')
+  // The response promises the stored bytes verbatim (`Content-Encoding:
+  // identity`, exact `Content-Length`); `@fastify/compress` would otherwise
+  // gzip it anyway, since it treats `identity` as "not compressed yet".
+  @RouteConfig({ compress: false })
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: 'Download your saved transformation result' })
   @ApiParam({ name: 'itemId', format: 'uuid' })

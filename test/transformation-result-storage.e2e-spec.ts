@@ -1,18 +1,11 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import fastifyCookie from '@fastify/cookie';
-import fastifyMultipart from '@fastify/multipart';
-import fastifyStatic from '@fastify/static';
 import { readFileSync, type ReadStream } from 'fs';
 import { access } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { PassThrough } from 'stream';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -23,7 +16,6 @@ import {
 } from 'typeorm-transactional';
 
 import { AppModule } from '../src/core/app/app.module';
-import { ConfigService } from '../src/core/config/config.service';
 import {
   ConversionStorageReadError,
   ConversionFileStorageService,
@@ -43,6 +35,7 @@ import {
   TransformationResultAuditAction,
   TransformationResultAuditOutcome,
 } from '../src/modules/transformation-result-storage/transformation-result.enums';
+import { createTestApp } from './support/create-test-app';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 const FIXTURE = join(__dirname, 'support', 'conversion-fixtures', 'sample.csv');
@@ -98,37 +91,7 @@ describe('Transformation result storage and download (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-
-    const config = moduleFixture.get(ConfigService);
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, { secret: config.get('COOKIE_SECRET') });
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyMultipart, {
-        limits: {
-          fileSize: Number(config.get('PHOTO_MAX_SIZE_BYTES')),
-          files: 1,
-        },
-      });
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyStatic, {
-        root: resolve(config.get('ASSETS_DIR')),
-        prefix: '/assets/',
-      });
-
-    await app.init();
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
 
     users = moduleFixture.get(getRepositoryToken(User));
     roles = moduleFixture.get(getRepositoryToken(Role));
@@ -256,6 +219,11 @@ describe('Transformation result storage and download (e2e)', () => {
   async function storeDocument(
     user: User = owner,
     cookie: string = ownerCookie,
+    source: { bytes: Buffer; name: string; targetFormat: string } = {
+      bytes: readFileSync(FIXTURE),
+      name: 'sample.csv',
+      targetFormat: 'yaml',
+    },
   ): Promise<{
     responseBytes: Buffer;
     record: ConversionRecord;
@@ -264,8 +232,8 @@ describe('Transformation result storage and download (e2e)', () => {
     const response = await request(baseUrl)
       .post('/api/convert')
       .set('Cookie', cookie)
-      .attach('file', readFileSync(FIXTURE), 'sample.csv')
-      .field('targetFormat', 'yaml')
+      .attach('file', source.bytes, source.name)
+      .field('targetFormat', source.targetFormat)
       .field('store', 'true')
       .expect(200);
 
@@ -312,6 +280,33 @@ describe('Transformation result storage and download (e2e)', () => {
   }
 
   describe('self download', () => {
+    it('never compresses a download, even when the client accepts gzip', async () => {
+      // Large and of a compressible type (application/json), so
+      // `@fastify/compress` would gzip it if the route did not opt out.
+      const rows = Array.from(
+        { length: 400 },
+        (_, index) => `${index},name-${index},${index * 3}`,
+      );
+      const saved = await storeDocument(owner, ownerCookie, {
+        bytes: Buffer.from(['id,name,score', ...rows].join('\n'), 'utf8'),
+        name: 'large.csv',
+        targetFormat: 'json',
+      });
+      expect(saved.responseBytes.length).toBeGreaterThan(4096);
+
+      const response = await request(baseUrl)
+        .get(selfPath(saved.record.id))
+        .set('Cookie', ownerCookie)
+        .set('Accept-Encoding', 'gzip, deflate, br')
+        .expect(200);
+
+      expect(response.headers['content-encoding']).toBe('identity');
+      expect(response.headers['content-length']).toBe(
+        String(saved.responseBytes.length),
+      );
+      expect(Buffer.from(response.text, 'utf8')).toEqual(saved.responseBytes);
+    });
+
     it('streams exact private bytes repeatedly and concurrently', async () => {
       const saved = await storeDocument();
       await audits.createQueryBuilder().delete().execute();

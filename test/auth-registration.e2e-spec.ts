@@ -1,11 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { createHash } from 'crypto';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
-import fastifyCookie from '@fastify/cookie';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import {
@@ -17,7 +12,6 @@ import { IsNull, Repository } from 'typeorm';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 
 import { AppModule } from '../src/core/app/app.module';
-import { ConfigService } from '../src/core/config/config.service';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import {
   RegistrationAuditEvent,
@@ -32,6 +26,7 @@ import { Role } from '../src/modules/rbac/entities/role.entity';
 import { UserRole } from '../src/modules/rbac/entities/user-role.entity';
 import { AccessConfigService } from '../src/modules/rbac/access-config.service';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
+import { createTestApp } from './support/create-test-app';
 
 const ADMIN_PASSWORD = 'CorrectHorse123!';
 
@@ -67,27 +62,7 @@ describe('Auth Registration (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-
-    const configService = moduleFixture.get(ConfigService);
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, {
-        secret: configService.get('COOKIE_SECRET'),
-      });
-
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
 
     usersRepository = moduleFixture.get(getRepositoryToken(User));
     auditRepository = moduleFixture.get(

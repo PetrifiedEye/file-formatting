@@ -1,13 +1,7 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
-import fastifyCookie from '@fastify/cookie';
-import fastifyMultipart from '@fastify/multipart';
 import sharp from 'sharp';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -22,6 +16,7 @@ import { ConfigService } from '../src/core/config/config.service';
 import { ConversionRecord } from '../src/modules/conversion/entities/conversion-record.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
+import { createTestApp } from './support/create-test-app';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 
@@ -105,27 +100,8 @@ describePerf('Image conversion performance', () => {
     const mod: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
-    app = mod.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-    const config = mod.get(ConfigService);
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, { secret: config.get('COOKIE_SECRET') });
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyMultipart, {
-        limits: { fileSize: 20 * 1024 * 1024, files: 1 },
-      });
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+
+    ({ app, baseUrl } = await createTestApp(mod));
 
     userRepository = mod.get(getRepositoryToken(User));
     recordRepository = mod.get(getRepositoryToken(ConversionRecord));
@@ -220,25 +196,7 @@ describePerf('Image conversion performance', () => {
       )
       .compile();
 
-    const timed = mod.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-    const config = app.get(ConfigService);
-
-    await timed
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, { secret: config.get('COOKIE_SECRET') });
-    await timed
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyMultipart, {
-        limits: { fileSize: 20 * 1024 * 1024, files: 1 },
-      });
-    await timed.listen(0, '127.0.0.1');
-    await timed.getHttpAdapter().getInstance().ready();
-
-    const url = await timed.getUrl();
+    const { app: timed, baseUrl: url } = await createTestApp(mod);
 
     try {
       const login = await request(url)

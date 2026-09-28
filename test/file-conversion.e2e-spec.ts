@@ -1,17 +1,10 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
-import fastifyCookie from '@fastify/cookie';
-import fastifyMultipart from '@fastify/multipart';
-import fastifyStatic from '@fastify/static';
 import { readFileSync } from 'fs';
 import { readFile, rm } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
@@ -36,6 +29,7 @@ import {
   TransformationResultAuditAction,
   TransformationResultAuditOutcome,
 } from '../src/modules/transformation-result-storage/transformation-result.enums';
+import { createTestApp } from './support/create-test-app';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 const FIXTURES = join(__dirname, 'support', 'conversion-fixtures');
@@ -115,44 +109,9 @@ describe('File Format Conversion (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-
     configService = moduleFixture.get(ConfigService);
 
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, { secret: configService.get('COOKIE_SECRET') });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyMultipart, {
-        limits: {
-          fileSize: Number(configService.get('PHOTO_MAX_SIZE_BYTES')),
-          files: 1,
-        },
-      });
-
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyStatic, {
-        root: resolve(configService.get('ASSETS_DIR')),
-        prefix: '/assets/',
-      });
-
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture));
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
     recordRepository = moduleFixture.get(getRepositoryToken(ConversionRecord));

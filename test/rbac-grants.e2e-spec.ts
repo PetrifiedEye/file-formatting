@@ -4,15 +4,9 @@ import {
   INestApplication,
   Module,
   UseGuards,
-  ValidationPipe,
 } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import fastifyCookie from '@fastify/cookie';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
@@ -23,7 +17,6 @@ import {
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 
 import { AppModule } from '../src/core/app/app.module';
-import { ConfigService } from '../src/core/config/config.service';
 import { AccessConfigService } from '../src/modules/rbac/access-config.service';
 import { RequirePermission } from '../src/modules/rbac/decorators/require-permission.decorator';
 import { Grant } from '../src/modules/rbac/entities/grant.entity';
@@ -35,6 +28,7 @@ import { RbacModule } from '../src/modules/rbac/rbac.module';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';
 import { attachRbacTestAuth } from './support/rbac-test-auth.module';
+import { createTestApp } from './support/create-test-app';
 
 const TEST_PASSWORD = 'CorrectHorse123!';
 
@@ -94,28 +88,9 @@ describe('RBAC Grants CRUD (e2e)', () => {
       imports: [AppModule, FlipControllerModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
-
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
-    attachRbacTestAuth(app, moduleFixture);
-
-    const configService = moduleFixture.get(ConfigService);
-    await app
-      .getHttpAdapter()
-      .getInstance()
-      .register(fastifyCookie, {
-        secret: configService.get('COOKIE_SECRET'),
-      });
-
-    await app.init();
-    // Listen for real: concurrent supertest calls against one un-listened
-    // server object interleave onto the same ephemeral socket and produce
-    // bogus parse errors.
-    await app.listen(0, '127.0.0.1');
-    await app.getHttpAdapter().getInstance().ready();
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await createTestApp(moduleFixture, {
+      beforeInit: (created) => attachRbacTestAuth(created, moduleFixture),
+    }));
 
     roleRepository = moduleFixture.get(getRepositoryToken(Role));
     permissionRepository = moduleFixture.get(getRepositoryToken(Permission));
