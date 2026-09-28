@@ -28,6 +28,8 @@ const LIMITS = {
   maxConcurrent: 2,
   maxQueue: 16,
   svgFontDir: null,
+  svgLoadSystemFonts: false,
+  svgDefaultFontFamily: 'Geist',
 } satisfies ImageConversionLimits;
 
 /**

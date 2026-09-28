@@ -21,6 +21,8 @@ import type {
 } from '@/modules/conversion/upload/multipart-upload';
 import { UploadReader } from '@/modules/conversion/upload/upload-reader';
 
+import { parseBackground } from './formats/background';
+import type { Background } from './formats/background';
 import { IMAGE_CONVERSION_LIMITS } from './formats/image-format-handler';
 import type { ImageConversionLimits } from './formats/image-format-handler';
 import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
@@ -32,8 +34,19 @@ export interface ReceivedImage {
   sourceFormat: ImageFormat;
 }
 
+/** The non-file fields of an image conversion request, validated. */
+export interface ImageUploadFields {
+  targetFormat: ImageFormat;
+  store?: 'true' | 'false';
+  backgroundColor?: string;
+}
+
 /** An image upload as read by `ImageUploadPipe`. */
-export type ImageUpload = CollectedUpload<ReceivedImage, ImageFormat>;
+export type ImageUpload = CollectedUpload<
+  ReceivedImage,
+  ImageFormat,
+  ImageUploadFields
+>;
 
 export interface ImageConversionResult {
   buffer: Buffer;
@@ -118,7 +131,13 @@ export class ImageConversionService {
         throw upload.failure;
       }
 
-      result = await this.convert(upload.received, upload.targetFormat);
+      result = await this.convert(
+        upload.received,
+        upload.targetFormat,
+        parseBackground(
+          upload.fields.backgroundColor ?? this.limits.backgroundColor,
+        ),
+      );
 
       if (state.retentionRequested) {
         // Pessimistic until history-first finalization durably links the file.
@@ -244,6 +263,7 @@ export class ImageConversionService {
   private async convert(
     received: ReceivedImage,
     targetFormat: ImageFormat,
+    background: Background,
   ): Promise<ImageConversionResult> {
     // The time budget, taken once the upload is complete (FR-022). Waiters
     // are subject to it too: queueing behind other conversions must not buy
@@ -254,7 +274,12 @@ export class ImageConversionService {
       const release = await acquireConversionSlot(this.limiter, deadline);
 
       try {
-        return await this.runPipeline(received, targetFormat, deadline);
+        return await this.runPipeline(
+          received,
+          targetFormat,
+          background,
+          deadline,
+        );
       } finally {
         release();
       }
@@ -266,6 +291,7 @@ export class ImageConversionService {
   private async runPipeline(
     received: ReceivedImage,
     targetFormat: ImageFormat,
+    background: Background,
     deadline: Deadline,
   ): Promise<ImageConversionResult> {
     // A bad request, not a 415: both formats are supported and both directions
@@ -280,7 +306,11 @@ export class ImageConversionService {
     const source = this.registry.requireDecoder(received.sourceFormat);
     const target = this.registry.requireEncoder(targetFormat);
 
-    const context = { limits: this.limits, signal: deadline.signal };
+    const context = {
+      limits: this.limits,
+      signal: deadline.signal,
+      background,
+    };
 
     const image = await this.underDeadline(
       () => source.decode(received.bytes, context),

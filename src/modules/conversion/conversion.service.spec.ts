@@ -504,6 +504,7 @@ describe('ConversionService', () => {
         sizeBytes: Buffer.byteLength(FIXTURES[ConversionFormat.CSV]),
       },
       targetFormat: ConversionFormat.JSON,
+      fields: { targetFormat: ConversionFormat.JSON },
     });
 
     it('preserves result bytes and metadata while using the shared finalizer', async () => {

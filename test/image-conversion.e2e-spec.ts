@@ -277,10 +277,9 @@ describe('Image Conversion (e2e)', () => {
     });
 
     /** SC-003, pixel by pixel. */
-    it('composites a transparent PNG onto the configured background', async () => {
-      const background = configService.get('IMAGE_BACKGROUND_COLOR');
-
-      expect(background).toBe('#ffffff');
+    it('composites a transparent PNG onto white for JPEG by default', async () => {
+      // The default background is `transparent`, which a JPEG cannot be.
+      expect(configService.get('IMAGE_BACKGROUND_COLOR')).toBe('transparent');
 
       const response = await convert(
         fixture('fully-transparent.png'),
@@ -297,10 +296,100 @@ describe('Image Conversion (e2e)', () => {
       expect(info.channels).toBe(3);
 
       for (let index = 0; index < data.length; index += 1) {
-        // Fully transparent everywhere, so the result is the background
-        // throughout. JPEG is lossy, hence the tolerance.
+        // Fully transparent everywhere, so the result is white throughout.
+        // JPEG is lossy, hence the tolerance.
         expect(data[index]).toBeGreaterThan(245);
       }
+    });
+
+    describe('backgroundColor', () => {
+      const withBackground = (
+        body: Buffer,
+        filename: string,
+        targetFormat: string,
+        backgroundColor: string,
+      ) =>
+        request(baseUrl)
+          .post('/api/images/convert')
+          .set('Cookie', cookie)
+          .attach('file', body, filename)
+          .field('targetFormat', targetFormat)
+          .field('backgroundColor', backgroundColor);
+
+      const cornerOf = async (body: Buffer) => {
+        const { data, info } = await sharp(body)
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        return [...data.subarray(0, info.channels)];
+      };
+
+      it('renders an SVG onto a transparent canvas by default', async () => {
+        const response = await convert(
+          fixture('text-on-transparent.svg'),
+          'text-on-transparent.svg',
+          'png',
+        );
+
+        expect(response.status).toBe(200);
+        expect((await cornerOf(response.body as Buffer))[3]).toBe(0);
+      });
+
+      it('renders SVG <text> (it used to vanish)', async () => {
+        const response = await convert(
+          fixture('text-on-transparent.svg'),
+          'text-on-transparent.svg',
+          'png',
+        );
+        const { data } = await sharp(response.body as Buffer)
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+
+        let inked = 0;
+        for (let alpha = 3; alpha < data.length; alpha += 4) {
+          if (data[alpha] > 0) inked += 1;
+        }
+        expect(inked).toBeGreaterThan(500);
+      });
+
+      it('applies a requested colour to an SVG', async () => {
+        const response = await withBackground(
+          fixture('text-on-transparent.svg'),
+          'text-on-transparent.svg',
+          'png',
+          '#ff0000',
+        );
+
+        expect(response.status).toBe(200);
+        expect((await cornerOf(response.body as Buffer)).slice(0, 3)).toEqual([
+          255, 0, 0,
+        ]);
+      });
+
+      it('applies a requested colour to a transparent PNG', async () => {
+        const response = await withBackground(
+          fixture('fully-transparent.png'),
+          'fully-transparent.png',
+          'jpeg',
+          '#0000ff',
+        );
+        const [r, g, b] = await cornerOf(response.body as Buffer);
+
+        expect(r).toBeLessThan(15);
+        expect(g).toBeLessThan(15);
+        expect(b).toBeGreaterThan(240);
+      });
+
+      it('refuses a malformed colour with its own code', async () => {
+        const response = await withBackground(
+          fixture('solid.png'),
+          'solid.png',
+          'jpeg',
+          'red',
+        );
+
+        expect(response.status).toBe(400);
+        expect(response.body.code).toBe('invalid_background_color');
+      });
     });
 
     it('carries no metadata into the result', async () => {
@@ -1113,7 +1202,7 @@ describe('Image Conversion (e2e)', () => {
       expect(formats().tags).toEqual(['image-conversion']);
     });
 
-    it('documents the three multipart parts', () => {
+    it('documents the four multipart parts', () => {
       const schema =
         convert().requestBody!.content['multipart/form-data'].schema;
 
@@ -1121,6 +1210,7 @@ describe('Image Conversion (e2e)', () => {
         'multipart/form-data',
       ]);
       expect(Object.keys(schema.properties ?? {}).sort()).toEqual([
+        'backgroundColor',
         'file',
         'store',
         'targetFormat',

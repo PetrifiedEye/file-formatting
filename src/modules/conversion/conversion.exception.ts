@@ -96,6 +96,13 @@ export const CONVERSION_ERROR_DEFINITIONS: Record<
     category: ConversionErrorCategory.BAD_REQUEST,
     message: () => '"store" must be "true" or "false"',
   },
+  [ConversionErrorCode.INVALID_BACKGROUND_COLOR]: {
+    status: HttpStatus.BAD_REQUEST,
+    category: ConversionErrorCategory.BAD_REQUEST,
+    message: () =>
+      'backgroundColor must be "transparent", #rrggbb or #rrggbbaa',
+  },
+
   [ConversionErrorCode.INVALID_ENCODING]: {
     status: HttpStatus.BAD_REQUEST,
     category: ConversionErrorCategory.PARSE_ERROR,

@@ -54,13 +54,24 @@ read the _same computation_, so they cannot drift. Two lists would.
 
 ```ts
 interface RasterImage {
-  data: Buffer; // row-major, 8 bits per channel
   width: number; // post-orientation
   height: number;
   channels: 3 | 4;
   hasAlpha: boolean;
+  decodesOnRead: boolean; // producing the pixels still decodes the upload
+  toSharp(): sharp.Sharp; // a pipeline yielding the pixels, 8 bits/channel
 }
 ```
+
+**Its pixels are a pipeline, not a buffer.** A decoded PNG or JPEG is never
+expanded into a `width × height × channels` buffer on the JS heap: decode and
+encode run as one libvips pass, while the target encodes. Measured on a
+16-megapixel PNG → JPEG, peak RSS per conversion went from ~146 MiB (raw frame
+on the heap, plus libvips' own) to ~113 MiB — libvips and the JPEG encoder
+alone account for ~93 MiB of that. A rendered SVG holds one copy of its pixels
+(the canvas extension below happens inside the same pipeline). The flip side:
+a file whose header is fine but whose payload is truncated is only found out
+while encoding; `decodesOnRead` is what still reports it as `image_invalid`.
 
 **It has no metadata field, and that is the mechanism.** EXIF, GPS, camera
 data, and colour profiles cannot cross it because there is nowhere for them to
@@ -107,7 +118,8 @@ handle — it is unrepresentable.
 Two independent checks, because they fail differently:
 
 - a **raw-text scan** for `<!DOCTYPE`, `<!ENTITY`, `<script`, `javascript:`,
-  `@import`, and `on<name>=`;
+  `@import`, and — in the markup only, not in text content, so a `<text>`
+  reading "someone = …" is not mistaken for a handler — `on<name>=`;
 - a **structured walk** (`fast-xml-parser`, `processEntities: false`) refusing
   active elements, `on*` attributes, and every reference that is not a
   same-document fragment or an inline `data:` URI.
@@ -151,19 +163,39 @@ long a render can block, and that should be said here rather than assumed away.
 The intrinsic-size rule rounds a fractional dimension **up**, so a `10.2px`
 drawing is never clipped. resvg rounds to nearest and produces 10. Rather than
 let the library quietly redefine a documented rule, `SvgHandler.fit()` extends
-the canvas to the resolved size with the background colour — the drawing is
-neither scaled nor moved, and the output is exactly the size the contract
-promises. This is the only place the two disagree; every other worked example
+the canvas to the resolved size, transparently — the drawing is neither scaled
+nor moved, and the output is exactly the size the contract promises. This is the only place the two disagree; every other worked example
 in the contract matches resvg exactly.
 
 ### Fonts
 
-`loadSystemFonts` is **off**. Text renders using only fonts from
-`IMAGE_SVG_FONT_DIR`, if one is configured.
+resvg silently drops every glyph it has no font for — which is how `<text>`
+used to vanish: no fonts were configured at all. Now:
 
-**Stated plainly: with no font directory configured, `<text>` renders as
-nothing.** This is deliberate. Substituting whatever font a host happens to
-have would make the same SVG convert differently on two machines.
+- `IMAGE_SVG_FONT_DIR` defaults to the bundled `resources/fonts` (Geist
+  Regular, SIL OFL 1.1 — Latin and Cyrillic), so text renders the same on every
+  host;
+- `IMAGE_SVG_DEFAULT_FONT_FAMILY` (`Geist`) is what text falls back to when it
+  names no font, a generic family (`serif`, `monospace`, …) or a font that is
+  not installed;
+- `IMAGE_SVG_LOAD_SYSTEM_FONTS=true` also uses the host's fonts, for scripts
+  the bundled font lacks — at the price of output that depends on the machine.
+
+A configured font directory with no font in it is logged at startup.
+
+### Background
+
+`backgroundColor` (multipart field: `transparent`, `#rrggbb`, `#rrggbbaa`;
+default `IMAGE_BACKGROUND_COLOR`, itself `transparent`) is what transparent
+pixels are composited onto. It is applied once, by the encoder, whatever the
+source — SVG is rendered onto a transparent canvas:
+
+- **PNG** keeps transparency by default; an opaque colour flattens onto it; a
+  translucent one is laid under the image, keeping alpha.
+- **JPEG** cannot be transparent, so the colour is itself composited onto
+  white first: by default a transparent source comes out white, never black.
+
+A malformed value is `400 invalid_background_color`.
 
 ### Multi-frame input
 
@@ -199,13 +231,13 @@ Nothing in this feature serves them over HTTP at all.
 
 ## Configuration
 
-Thirteen `IMAGE_*` settings, all validated at startup with defaults, so an
+Fifteen `IMAGE_*` settings, all validated at startup with defaults, so an
 administrator retunes them with no code change and no migration. See
 [`.env.example`](../../../.env.example).
 
-Peak raster memory is bounded by `IMAGE_MAX_PIXELS × 4 bytes ×
-IMAGE_MAX_CONCURRENT` — 16 MP and 2 by default, so ≈128 MiB, plus input and
-output buffers bounded by the byte caps. `IMAGE_MAX_CONCURRENT` defaults
+Peak raster memory is bounded by roughly `IMAGE_MAX_PIXELS × 7 bytes ×
+IMAGE_MAX_CONCURRENT` — about 113 MiB per 16 MP conversion, measured, most of
+it inside libvips — plus input and output buffers bounded by the byte caps. `IMAGE_MAX_CONCURRENT` defaults
 _lower_ than the text pipeline's because an image's expanded form is far larger
 relative to its upload than a parsed document's is.
 

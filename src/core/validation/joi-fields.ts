@@ -32,3 +32,14 @@ export const pageLimitField = () => Joi.number().integer().min(1).max(100);
 
 /** `"true"` / `"false"` as sent in a multipart form field. */
 export const multipartFlagField = () => Joi.string().valid('true', 'false');
+
+/**
+ * A colour transparency is composited onto: `transparent`, `#rrggbb` or
+ * `#rrggbbaa`. Shared by the image route's `backgroundColor` field and the
+ * `IMAGE_BACKGROUND_COLOR` default.
+ */
+export const BACKGROUND_COLOR_PATTERN =
+  /^(?:transparent|#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?)$/;
+
+export const backgroundColorField = () =>
+  Joi.string().pattern(BACKGROUND_COLOR_PATTERN);

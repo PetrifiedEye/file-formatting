@@ -1,6 +1,11 @@
 import { renderAsync } from '@resvg/resvg-js';
 
-import { expectRefusal, imageFixture, testContext } from './image-test-support';
+import {
+  expectRefusal,
+  imageFixture,
+  testContext,
+  pixelsOf,
+} from './image-test-support';
 import { SvgHandler } from './svg.handler';
 
 /**
@@ -58,7 +63,7 @@ describe('SvgHandler', () => {
       expect(image.width).toBe(120);
       expect(image.height).toBe(80);
       expect(image.channels).toBe(4);
-      expect(image.data).toHaveLength(120 * 80 * 4);
+      expect(await pixelsOf(image)).toHaveLength(120 * 80 * 4);
     });
 
     it('derives the size from a viewBox alone', async () => {
@@ -105,17 +110,12 @@ describe('SvgHandler', () => {
 
       expect(image.width).toBe(11);
       expect(image.height).toBe(11);
-      expect(image.data).toHaveLength(11 * 11 * 4);
+      expect(await pixelsOf(image)).toHaveLength(11 * 11 * 4);
     });
 
-    it('renders over the configured background', async () => {
-      const image = await handler.decode(
-        imageFixture('valid-declared.svg'),
-        testContext({ backgroundColor: '#ff0000' }),
-      );
-
-      // The drawing covers the whole canvas, so check a corner of a document
-      // whose own paint stops short of it instead.
+    it('renders onto a transparent canvas, whatever the background', async () => {
+      // The background is the encoder's to apply — once, for every source —
+      // so the render itself leaves empty canvas transparent.
       const empty = await handler.decode(
         Buffer.from(
           '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>',
@@ -123,8 +123,63 @@ describe('SvgHandler', () => {
         testContext({ backgroundColor: '#ff0000' }),
       );
 
-      expect([...empty.data.subarray(0, 4)]).toEqual([255, 0, 0, 255]);
-      expect(image.width).toBe(120);
+      expect([...(await pixelsOf(empty)).subarray(0, 4)]).toEqual([0, 0, 0, 0]);
+    });
+
+    it('extends a fractional canvas transparently too', async () => {
+      const image = await handler.decode(
+        imageFixture('fractional.svg'),
+        testContext(),
+      );
+      const pixels = await pixelsOf(image);
+
+      // The added column is the last one: fully transparent.
+      const lastInFirstRow = pixels.subarray((11 - 1) * 4, 11 * 4);
+      expect(lastInFirstRow[3]).toBe(0);
+    });
+
+    /**
+     * The disappearing-text bug: with no fonts, resvg drops every glyph it
+     * cannot shape, silently. The bundled font — and the fallback family —
+     * make `<text>` render, whether it names a font or not.
+     */
+    describe('text', () => {
+      const withText = (attributes: string, text = 'Hello, Привет') =>
+        Buffer.from(
+          '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="40">' +
+            `<text x="4" y="30" font-size="24" ${attributes}>${text}</text></svg>`,
+        );
+
+      const inkedPixels = async (svg: Buffer, context = testContext()) => {
+        const pixels = await pixelsOf(await handler.decode(svg, context));
+        let inked = 0;
+        for (let alpha = 3; alpha < pixels.length; alpha += 4) {
+          if (pixels[alpha] > 0) inked += 1;
+        }
+        return inked;
+      };
+
+      it.each([
+        ['no font-family', ''],
+        ['a generic family', 'font-family="serif"'],
+        ['a family that is not installed', 'font-family="Comic Sans MS"'],
+        ['the bundled family', 'font-family="Geist"'],
+      ])('renders text naming %s', async (_label, attributes) => {
+        expect(await inkedPixels(withText(attributes))).toBeGreaterThan(200);
+      });
+
+      it('renders Cyrillic', async () => {
+        expect(await inkedPixels(withText('', 'Привет'))).toBeGreaterThan(200);
+      });
+
+      it('renders nothing with no fonts at all — the configuration it fixes', async () => {
+        expect(
+          await inkedPixels(
+            withText(''),
+            testContext({ svgFontDir: null, svgLoadSystemFonts: false }),
+          ),
+        ).toBe(0);
+      });
     });
   });
 

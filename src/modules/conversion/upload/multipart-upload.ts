@@ -51,8 +51,19 @@ export interface UploadAttempt<F extends string> {
  * record every refused request exactly as it records a failed conversion
  * (FR-021, FR-024 / FR-027), and then raise it.
  */
-export type CollectedUpload<R, F extends string> =
-  | { ok: true; attempt: UploadAttempt<F>; received: R; targetFormat: F }
+export type CollectedUpload<
+  R,
+  F extends string,
+  V extends { targetFormat: F } = { targetFormat: F; store?: 'true' | 'false' },
+> =
+  | {
+      ok: true;
+      attempt: UploadAttempt<F>;
+      received: R;
+      targetFormat: F;
+      /** Every non-file field, validated. */
+      fields: V;
+    }
   | { ok: false; attempt: UploadAttempt<F>; failure: unknown };
 
 /**

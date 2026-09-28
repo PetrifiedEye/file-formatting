@@ -5,6 +5,7 @@ import {
   imageFixture,
   pixelAt,
   testContext,
+  pixelsOf,
 } from './image-test-support';
 import { JpegHandler } from './jpeg.handler';
 import { PngHandler } from './png.handler';
@@ -48,7 +49,7 @@ describe('JpegHandler', () => {
 
       expect(image.hasAlpha).toBe(false);
       expect(image.channels).toBe(3);
-      expect(image.data).toHaveLength(64 * 48 * 3);
+      expect(await pixelsOf(image)).toHaveLength(64 * 48 * 3);
     });
 
     /**
@@ -82,7 +83,7 @@ describe('JpegHandler', () => {
 
       expect(image.width).toBe(64);
       expect(image.height).toBe(48);
-      expect(image.data).toHaveLength(64 * 48 * 3);
+      expect(await pixelsOf(image)).toHaveLength(64 * 48 * 3);
     });
 
     it('surfaces bytes that are not an image as image_invalid', async () => {
@@ -155,6 +156,39 @@ describe('JpegHandler', () => {
         expect(g).toBeLessThan(15);
         expect(b).toBeLessThan(15);
       }
+    });
+
+    it('composites transparency onto white by default (backgroundColor transparent)', async () => {
+      // JPEG cannot be transparent, so "keep it transparent" means white.
+      const context = testContext();
+      const decoded = await png.decode(
+        imageFixture('fully-transparent.png'),
+        context,
+      );
+      const { data, info } = await sharp(await handler.encode(decoded, context))
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      for (const channel of pixelAt(data, info.width, info.channels, 0, 0)) {
+        expect(channel).toBeGreaterThan(245);
+      }
+    });
+
+    it('composites a translucent background onto white first', async () => {
+      // 50% blue over white is (127, 127, 255).
+      const context = testContext({ backgroundColor: '#0000ff80' });
+      const decoded = await png.decode(
+        imageFixture('fully-transparent.png'),
+        context,
+      );
+      const { data, info } = await sharp(await handler.encode(decoded, context))
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const [r, g, b] = pixelAt(data, info.width, info.channels, 0, 0);
+
+      expect(Math.abs(r - 127)).toBeLessThan(10);
+      expect(Math.abs(g - 127)).toBeLessThan(10);
+      expect(b).toBeGreaterThan(240);
     });
 
     it('leaves an already-opaque image visually unchanged', async () => {

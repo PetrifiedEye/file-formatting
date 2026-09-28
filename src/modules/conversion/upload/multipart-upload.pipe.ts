@@ -14,7 +14,6 @@ import type {
 import { UploadReader } from './upload-reader';
 
 const FILE_PART = 'file';
-const FIELD_PARTS = ['targetFormat', 'store'];
 
 /** How long to wait for the parts iterator to explain a cut-short file. */
 const CAUSE_LOOKUP_TIMEOUT_MS = 1_000;
@@ -24,6 +23,19 @@ export interface ConversionFields<F extends string> {
   targetFormat: F;
   store?: 'true' | 'false';
 }
+
+/**
+ * The refusal for a field that fails validation. Each field has its own code
+ * so a caller can tell the refusals apart; anything not listed is reported
+ * as an unsupported target, the one field every route has.
+ */
+const FIELD_ERROR_CODES: Record<
+  string,
+  Exclude<ConversionErrorCode, 'unauthenticated'>
+> = {
+  store: ConversionErrorCode.INVALID_STORE_FLAG,
+  backgroundColor: ConversionErrorCode.INVALID_BACKGROUND_COLOR,
+};
 
 /**
  * Reads a conversion upload: exactly one `file` part plus `targetFormat` and an
@@ -47,9 +59,13 @@ export interface ConversionFields<F extends string> {
 export abstract class MultipartUploadPipe<
   R,
   F extends string,
-> implements PipeTransform<MultipartSource, Promise<CollectedUpload<R, F>>> {
-  /** Validates the non-file parts; the global pipe never sees a multipart body. */
-  protected abstract readonly fieldsSchema: ObjectSchema<ConversionFields<F>>;
+  V extends ConversionFields<F> = ConversionFields<F>,
+> implements PipeTransform<MultipartSource, Promise<CollectedUpload<R, F, V>>> {
+  /**
+   * Validates the non-file parts; the global pipe never sees a multipart
+   * body. Its keys are also the whitelist: any other field is refused.
+   */
+  protected abstract readonly fieldsSchema: ObjectSchema<V>;
 
   /** The largest configured per-format input limit: the transport ceiling. */
   protected abstract maxInputBytes(): number;
@@ -67,7 +83,7 @@ export abstract class MultipartUploadPipe<
     attempt: UploadAttempt<F>,
   ): Promise<R>;
 
-  async transform(request: MultipartSource): Promise<CollectedUpload<R, F>> {
+  async transform(request: MultipartSource): Promise<CollectedUpload<R, F, V>> {
     const attempt: UploadAttempt<F> = {
       startedAt: new Date(),
       originalFileName: '',
@@ -78,8 +94,14 @@ export abstract class MultipartUploadPipe<
     };
 
     try {
-      const { received, targetFormat } = await this.collect(request, attempt);
-      return { ok: true, attempt, received, targetFormat };
+      const { received, fields } = await this.collect(request, attempt);
+      return {
+        ok: true,
+        attempt,
+        received,
+        targetFormat: fields.targetFormat,
+        fields,
+      };
     } catch (failure) {
       return { ok: false, attempt, failure };
     }
@@ -88,7 +110,7 @@ export abstract class MultipartUploadPipe<
   private async collect(
     request: MultipartSource,
     attempt: UploadAttempt<F>,
-  ): Promise<{ received: R; targetFormat: F }> {
+  ): Promise<{ received: R; fields: V }> {
     if (!request.isMultipart()) {
       throw new ConversionException(ConversionErrorCode.MISSING_FILE);
     }
@@ -134,7 +156,7 @@ export abstract class MultipartUploadPipe<
       throw new ConversionException(ConversionErrorCode.MISSING_FILE);
     }
 
-    return { received, targetFormat: validated.targetFormat };
+    return { received, fields: validated };
   }
 
   private async receiveFile(
@@ -199,7 +221,10 @@ export abstract class MultipartUploadPipe<
     fields: Record<string, string>,
     attempt: UploadAttempt<F>,
   ): void {
-    if (!FIELD_PARTS.includes(part.fieldname) || part.fieldname in fields) {
+    if (
+      !this.fieldNames().includes(part.fieldname) ||
+      part.fieldname in fields
+    ) {
       throw new ConversionException(ConversionErrorCode.UNEXPECTED_PART);
     }
 
@@ -214,8 +239,16 @@ export abstract class MultipartUploadPipe<
     }
   }
 
+  private fieldNames(): string[] {
+    const keys = this.fieldsSchema.describe().keys as
+      | Record<string, unknown>
+      | undefined;
+
+    return Object.keys(keys ?? {});
+  }
+
   /** Each field has its own code so a caller can tell the refusals apart. */
-  private validateFields(fields: Record<string, string>): ConversionFields<F> {
+  private validateFields(fields: Record<string, string>): V {
     if (fields.targetFormat === undefined) {
       throw new ConversionException(ConversionErrorCode.MISSING_TARGET_FORMAT);
     }
@@ -224,9 +257,8 @@ export abstract class MultipartUploadPipe<
 
     if (!result.ok) {
       throw new ConversionException(
-        result.failedKeys[0] === 'store'
-          ? ConversionErrorCode.INVALID_STORE_FLAG
-          : ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
+        FIELD_ERROR_CODES[result.failedKeys[0]] ??
+          ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
       );
     }
 

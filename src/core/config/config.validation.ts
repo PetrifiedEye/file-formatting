@@ -1,5 +1,7 @@
 import Joi from 'joi';
 
+import { BACKGROUND_COLOR_PATTERN } from '@/core/validation/joi-fields';
+
 import { Config } from './config.types';
 
 export const configValidationSchema = Joi.object<Config>({
@@ -214,9 +216,9 @@ export const configValidationSchema = Joi.object<Config>({
    * transparent PNG somebody converts.
    */
   IMAGE_BACKGROUND_COLOR: Joi.string()
-    .pattern(/^#[0-9a-fA-F]{6}$/)
+    .pattern(BACKGROUND_COLOR_PATTERN)
     .optional()
-    .default('#ffffff'),
+    .default('transparent'),
   IMAGE_JPEG_QUALITY: Joi.number()
     .integer()
     .min(1)
@@ -230,6 +232,14 @@ export const configValidationSchema = Joi.object<Config>({
     .default(30000),
   IMAGE_MAX_CONCURRENT: Joi.number().integer().positive().optional().default(2),
   IMAGE_MAX_QUEUE: Joi.number().integer().min(0).optional().default(16),
-  /** Empty is meaningful: no fonts, and no system-font scan. */
-  IMAGE_SVG_FONT_DIR: Joi.string().allow('').optional().default(''),
+  /** Empty means no bundled fonts (then only system fonts, if enabled). */
+  IMAGE_SVG_FONT_DIR: Joi.string()
+    .allow('')
+    .optional()
+    .default('resources/fonts'),
+  IMAGE_SVG_LOAD_SYSTEM_FONTS: Joi.boolean().optional().default(false),
+  IMAGE_SVG_DEFAULT_FONT_FAMILY: Joi.string()
+    .min(1)
+    .optional()
+    .default('Geist'),
 });

@@ -16,6 +16,7 @@ export const ConversionErrorCode = {
   MISSING_TARGET_FORMAT: 'missing_target_format',
   SAME_FORMAT: 'same_format',
   INVALID_STORE_FLAG: 'invalid_store_flag',
+  INVALID_BACKGROUND_COLOR: 'invalid_background_color',
   INVALID_ENCODING: 'invalid_encoding',
   PARSE_ERROR: 'parse_error',
   CSV_DUPLICATE_HEADER: 'csv_duplicate_header',

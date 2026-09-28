@@ -135,6 +135,7 @@ nobody expects `CSV → JSON → CSV → JSON` to restore a `null`.
    Without the namespace declaration, `ff:*` attributes are ordinary
    attributes: someone else's `ff:` prefix, or a hint typed by hand, changes
    nothing.
+
 9. The predefined entities (`&lt;` `&gt;` `&amp;` `&quot;` `&apos;`) and
    character references (`&#10;`, `&#x41;`) are decoded — in one pass, so
    `&amp;lt;` is the text `&lt;`. A reference to a non-character (`&#1;`) →

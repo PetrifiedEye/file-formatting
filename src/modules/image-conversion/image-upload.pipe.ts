@@ -8,13 +8,17 @@ import { UploadReader } from '@/modules/conversion/upload/upload-reader';
 import { ImageFormatRegistryService } from './detection/image-format-registry.service';
 import { convertImageRequestDtoSchema } from './dto/convert-image-request.dto';
 import { ImageConversionService } from './image-conversion.service';
-import type { ReceivedImage } from './image-conversion.service';
+import type {
+  ImageUploadFields,
+  ReceivedImage,
+} from './image-conversion.service';
 
 /** Reads a `POST /api/images/convert` upload: an image to convert. */
 @Injectable()
 export class ImageUploadPipe extends MultipartUploadPipe<
   ReceivedImage,
-  ImageFormat
+  ImageFormat,
+  ImageUploadFields
 > {
   protected readonly fieldsSchema = convertImageRequestDtoSchema;
 

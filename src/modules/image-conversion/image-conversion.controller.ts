@@ -140,6 +140,14 @@ export class ImageConversionController {
           default: 'false',
           description: 'Keep the result in application storage.',
         },
+        backgroundColor: {
+          type: 'string',
+          pattern: '^(transparent|#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?)$',
+          default: 'transparent',
+          description:
+            'What transparent pixels are composited onto. JPEG, which ' +
+            'cannot be transparent, gets the colour over white.',
+        },
       },
     },
   })

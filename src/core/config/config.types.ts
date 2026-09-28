@@ -152,8 +152,9 @@ export interface Config {
 
   /**
    * Decoded pixel budget, read from the container header before any pixel
-   * buffer is allocated. Peak raster memory is bounded by
-   * `IMAGE_MAX_PIXELS x 4 bytes x IMAGE_MAX_CONCURRENT`.
+   * buffer is allocated. Peak raster memory is roughly
+   * `IMAGE_MAX_PIXELS x 7 bytes x IMAGE_MAX_CONCURRENT`, most of it inside
+   * libvips (see the image-conversion README).
    */
   IMAGE_MAX_PIXELS?: number;
 
@@ -161,8 +162,9 @@ export interface Config {
   IMAGE_MAX_OUTPUT_BYTES?: number;
 
   /**
-   * What transparency is composited onto when the target cannot hold alpha,
-   * and what an SVG is rasterised over. `#rrggbb`.
+   * What transparency is composited onto when a request names no
+   * `backgroundColor`: `transparent` (default), `#rrggbb` or `#rrggbbaa`. A
+   * JPEG, which cannot be transparent, gets the colour over white.
    */
   IMAGE_BACKGROUND_COLOR?: string;
 
@@ -183,10 +185,21 @@ export interface Config {
   IMAGE_MAX_QUEUE?: number;
 
   /**
-   * Fonts available to SVG rasterisation. Empty means no fonts at all and no
-   * system-font scan, so `<text>` renders as nothing — deliberate, because
-   * substituting whatever font a host happens to have would make output
-   * non-reproducible across machines.
+   * Fonts available to SVG rasterisation — the bundled `resources/fonts` by
+   * default, so `<text>` renders identically on every host. Relative paths
+   * resolve against the working directory.
    */
   IMAGE_SVG_FONT_DIR?: string;
+
+  /**
+   * Also let SVG rasterisation use the host's installed fonts (for scripts the
+   * bundled font lacks). Off by default: output would then vary by machine.
+   */
+  IMAGE_SVG_LOAD_SYSTEM_FONTS?: boolean;
+
+  /**
+   * The family `<text>` falls back to when it names none, a generic one, or
+   * one that is not installed. Must exist in the loaded fonts.
+   */
+  IMAGE_SVG_DEFAULT_FONT_FAMILY?: string;
 }

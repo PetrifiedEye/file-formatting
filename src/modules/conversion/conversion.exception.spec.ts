@@ -16,6 +16,7 @@ const DOCUMENTED: [string, HttpStatus, ConversionErrorCategory][] = [
   ['missing_target_format', 400, ConversionErrorCategory.BAD_REQUEST],
   ['same_format', 400, ConversionErrorCategory.BAD_REQUEST],
   ['invalid_store_flag', 400, ConversionErrorCategory.BAD_REQUEST],
+  ['invalid_background_color', 400, ConversionErrorCategory.BAD_REQUEST],
   ['invalid_encoding', 400, ConversionErrorCategory.PARSE_ERROR],
   ['parse_error', 400, ConversionErrorCategory.PARSE_ERROR],
   ['csv_duplicate_header', 400, ConversionErrorCategory.PARSE_ERROR],
