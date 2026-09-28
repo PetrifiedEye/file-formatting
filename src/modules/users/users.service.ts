@@ -15,7 +15,7 @@ import { LocalFileStorageService } from '@/core/storage/local-file-storage.servi
 import { UserProfileResponseDto } from './dto/user-profile-response.dto';
 import { UserProfileAuditOutcome } from './entities/user-profile-audit-event.entity';
 import { User, UserStatus } from './entities/user.entity';
-import { UsersAuditService } from './users-audit.service';
+import { UsersAuditService } from '@/modules/users/profile/users-audit.service';
 import { detectImageExtension } from './utils/image-type';
 import type { RequestUser } from '@/modules/auth/guards/jwt-auth.guard';
 import {

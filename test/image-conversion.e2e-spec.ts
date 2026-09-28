@@ -19,7 +19,7 @@ import {
 import { AppModule } from '../src/core/app/app.module';
 import { ConfigService } from '../src/core/config/config.service';
 import { ConversionRecord } from '../src/modules/conversion/entities/conversion-record.entity';
-import { ConversionRetentionService } from '../src/modules/conversion/conversion-retention.service';
+import { ConversionRetentionService } from '../src/modules/conversion/history/conversion-retention.service';
 import { ConversionStoredFile } from '../src/modules/conversion/entities/conversion-stored-file.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { hashPassword } from '../src/modules/auth/utils/password-hasher';

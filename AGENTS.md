@@ -50,6 +50,23 @@ Every feature is a NestJS module with a controller and service(s):
 - **DTOs** — request/response classes with `class-validator` decorators and `@nestjs/swagger` `ApiProperty`
 - **Entities** — TypeORM entities in `entities/` subdirectories
 
+Group a module's files by sub-feature once it outgrows a flat folder. The module root keeps
+`*.module.ts`, the entry-point controller/service, and module-wide `*.constants|enums|exception.ts`;
+shared kinds stay in `dto/`, `entities/`, `guards/`, `utils/`. Everything else lives in a folder
+named after the sub-feature, with its spec beside it:
+
+```
+modules/auth/
+  auth.module.ts  auth.controller.ts  auth.service.ts
+  registration/   confirmation-challenge, confirmation-mail, registration-audit
+  login/          login-challenge, login-audit
+  session/        auth-session, token
+  password-reset/ password-reset
+  dto/  entities/  guards/  utils/  validators/
+```
+
+Imports across sub-feature folders use the `@/` alias; siblings in the same folder use `./`.
+
 Scaffold with Nest CLI when adding features:
 
 ```bash

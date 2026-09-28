@@ -12,14 +12,14 @@ import { SettingsModule } from '@/modules/settings/settings.module';
 import { User } from '@/modules/users/entities/user.entity';
 import { UsersModule } from '@/modules/users/users.module';
 
-import { AdminResultDownloadController } from './admin-result-download.controller';
+import { AdminResultDownloadController } from '@/modules/transformation-result-storage/download/admin-result-download.controller';
 import { TransformationResultAuditEvent } from './entities/transformation-result-audit-event.entity';
-import { SelfResultDownloadController } from './self-result-download.controller';
-import { TransformationResultAuditFilter } from './transformation-result-audit.filter';
-import { TransformationResultAuditService } from './transformation-result-audit.service';
-import { TransformationResultCleanupService } from './transformation-result-cleanup.service';
-import { TransformationResultDownloadService } from './transformation-result-download.service';
-import { TransformationRetentionPolicyService } from './transformation-retention-policy.service';
+import { SelfResultDownloadController } from '@/modules/transformation-result-storage/download/self-result-download.controller';
+import { TransformationResultAuditFilter } from '@/modules/transformation-result-storage/audit/transformation-result-audit.filter';
+import { TransformationResultAuditService } from '@/modules/transformation-result-storage/audit/transformation-result-audit.service';
+import { TransformationResultCleanupService } from '@/modules/transformation-result-storage/retention/transformation-result-cleanup.service';
+import { TransformationResultDownloadService } from '@/modules/transformation-result-storage/download/transformation-result-download.service';
+import { TransformationRetentionPolicyService } from '@/modules/transformation-result-storage/retention/transformation-retention-policy.service';
 
 @Module({
   imports: [

@@ -15,9 +15,12 @@ import {
   LoginAuditEventType,
   LoginAuditOutcome,
 } from '../entities/login-audit-event.entity';
-import { LoginAuditService } from '../login-audit.service';
-import { TokenService, TokenVerificationError } from '../token.service';
-import { AuthSessionService } from '../auth-session.service';
+import { LoginAuditService } from '@/modules/auth/login/login-audit.service';
+import {
+  TokenService,
+  TokenVerificationError,
+} from '@/modules/auth/session/token.service';
+import { AuthSessionService } from '@/modules/auth/session/auth-session.service';
 
 export interface RequestUser {
   id: string;

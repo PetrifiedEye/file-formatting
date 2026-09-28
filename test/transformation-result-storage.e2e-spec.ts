@@ -30,7 +30,7 @@ import { Role } from '../src/modules/rbac/entities/role.entity';
 import { UserRole } from '../src/modules/rbac/entities/user-role.entity';
 import { User, UserStatus } from '../src/modules/users/entities/user.entity';
 import { TransformationResultAuditEvent } from '../src/modules/transformation-result-storage/entities/transformation-result-audit-event.entity';
-import { TransformationResultCleanupService } from '../src/modules/transformation-result-storage/transformation-result-cleanup.service';
+import { TransformationResultCleanupService } from '../src/modules/transformation-result-storage/retention/transformation-result-cleanup.service';
 import {
   TransformationResultAuditAction,
   TransformationResultAuditOutcome,

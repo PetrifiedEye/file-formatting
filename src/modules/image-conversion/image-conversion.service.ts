@@ -10,15 +10,15 @@ import {
   TransformationType,
 } from '@/modules/conversion/conversion.enums';
 import { ConversionException } from '@/modules/conversion/conversion.exception';
-import { ConversionHistoryService } from '@/modules/conversion/conversion-history.service';
-import { ConversionRetentionService } from '@/modules/conversion/conversion-retention.service';
+import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
+import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
 import { UploadReader } from '@/modules/conversion/upload-reader';
 
 import { ConvertImageRequestDto } from './dto/convert-image-request.dto';
 import { IMAGE_CONVERSION_LIMITS } from './formats/image-format-handler';
 import type { ImageConversionLimits } from './formats/image-format-handler';
-import { ImageFormatDetectorService } from './image-format-detector.service';
-import { ImageFormatRegistryService } from './image-format-registry.service';
+import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
+import { ImageFormatRegistryService } from '@/modules/image-conversion/detection/image-format-registry.service';
 
 /**
  * The part of a Fastify request this service needs, and nothing more.

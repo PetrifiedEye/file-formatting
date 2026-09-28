@@ -50,7 +50,7 @@ import type {
 import { ConversionErrorResponseDto } from './dto/conversion-error-response.dto';
 import { ConvertRequestDto } from './dto/convert-request.dto';
 import { SupportedFormatsResponseDto } from './dto/supported-formats-response.dto';
-import { FormatRegistryService } from './format-registry.service';
+import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
 import { UploadReader } from './upload-reader';
 
 interface RequestWithUser extends FastifyRequest {

@@ -17,7 +17,7 @@ import {
   RbacAuditOutcome,
 } from './entities/rbac-audit-event.entity';
 import { Role } from './entities/role.entity';
-import { RbacAuditService } from './rbac-audit.service';
+import { RbacAuditService } from '@/modules/rbac/audit/rbac-audit.service';
 
 interface AccessSnapshot {
   permissionNames: Set<string>;

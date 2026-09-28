@@ -25,8 +25,8 @@ import { PngHandler } from './formats/png.handler';
 import { SvgHandler } from './formats/svg.handler';
 import { ImageConversionController } from './image-conversion.controller';
 import { ImageConversionService } from './image-conversion.service';
-import { ImageFormatDetectorService } from './image-format-detector.service';
-import { ImageFormatRegistryService } from './image-format-registry.service';
+import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
+import { ImageFormatRegistryService } from '@/modules/image-conversion/detection/image-format-registry.service';
 
 /**
  * Image conversion.

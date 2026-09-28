@@ -16,7 +16,7 @@ import {
   ConversionRetentionOutcome,
   TransformationType,
 } from '../src/modules/conversion/conversion.enums';
-import { ConversionHistoryService } from '../src/modules/conversion/conversion-history.service';
+import { ConversionHistoryService } from '../src/modules/conversion/history/conversion-history.service';
 import { ConversionRecord } from '../src/modules/conversion/entities/conversion-record.entity';
 import { AccessConfigService } from '../src/modules/rbac/access-config.service';
 import { Grant } from '../src/modules/rbac/entities/grant.entity';

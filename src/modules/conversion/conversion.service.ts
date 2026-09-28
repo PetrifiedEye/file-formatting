@@ -7,10 +7,10 @@ import {
   TransformationType,
 } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
-import { ConversionHistoryService } from './conversion-history.service';
-import { ConversionRetentionService } from './conversion-retention.service';
-import { FormatDetectorService } from './format-detector.service';
-import { FormatRegistryService } from './format-registry.service';
+import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
+import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
+import { FormatDetectorService } from '@/modules/conversion/detection/format-detector.service';
+import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
 import { guardStructure } from './formats/document-node';
 import { CONVERSION_LIMITS } from './formats/format-handler';
 import type { ConversionLimits } from './formats/format-handler';

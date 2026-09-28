@@ -1,0 +1,121 @@
+import { Reflector } from '@nestjs/core';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+
+import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
+import { TokenService } from '@/modules/auth/session/token.service';
+import { LoginAuditService } from '@/modules/auth/login/login-audit.service';
+import { AuthSessionService } from '@/modules/auth/session/auth-session.service';
+import { User } from '@/modules/users/entities/user.entity';
+import { UserRole } from '@/modules/rbac/entities/user-role.entity';
+
+import { AccessConfigService } from '@/modules/rbac/access-config.service';
+import {
+  REQUIRE_PERMISSION_KEY,
+  RequiredPermission,
+} from '@/modules/rbac/decorators/require-permission.decorator';
+import { PermissionGuard } from '@/modules/rbac/guards/permission.guard';
+import { PermissionsController } from './permissions.controller';
+import { PermissionsService } from './permissions.service';
+import { RbacAuditService } from '@/modules/rbac/audit/rbac-audit.service';
+
+describe('PermissionsController', () => {
+  let controller: PermissionsController;
+
+  const permissionsService = {
+    list: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [PermissionsController],
+      providers: [
+        { provide: PermissionsService, useValue: permissionsService },
+        JwtAuthGuard,
+        { provide: TokenService, useValue: { verifyAccessToken: jest.fn() } },
+        { provide: LoginAuditService, useValue: { record: jest.fn() } },
+        {
+          provide: AuthSessionService,
+          useValue: { findActive: jest.fn() },
+        },
+        {
+          provide: getRepositoryToken(User),
+          useValue: { findOne: jest.fn() },
+        },
+        {
+          provide: getRepositoryToken(UserRole),
+          useValue: { find: jest.fn() },
+        },
+        PermissionGuard,
+        Reflector,
+        { provide: AccessConfigService, useValue: {} },
+        { provide: RbacAuditService, useValue: {} },
+      ],
+    }).compile();
+
+    controller = module.get(PermissionsController);
+  });
+
+  it('is guarded by PermissionGuard requiring rbac:manage', () => {
+    const reflector = new Reflector();
+    const required = reflector.get<RequiredPermission>(
+      REQUIRE_PERMISSION_KEY,
+      PermissionsController,
+    );
+
+    expect(required).toEqual({ permission: 'rbac', action: 'manage' });
+
+    // Metadata alone is inert: without the guards actually attached, every
+    // endpoint below would be public and this suite would still pass.
+    const guards = Reflect.getMetadata(
+      '__guards__',
+      PermissionsController,
+    ) as unknown[];
+    expect(guards).toEqual(
+      expect.arrayContaining([JwtAuthGuard, PermissionGuard]),
+    );
+  });
+
+  it('delegates list() to the service', async () => {
+    permissionsService.list.mockResolvedValue([{ id: 'perm-1' }]);
+
+    expect(await controller.list()).toEqual([{ id: 'perm-1' }]);
+  });
+
+  it('delegates create() to the service with the actor id', async () => {
+    permissionsService.create.mockResolvedValue({ id: 'perm-1' });
+
+    await controller.create(
+      { name: 'docs', actions: ['read'] },
+      { user: { id: 'actor-1', roles: [] } },
+    );
+
+    expect(permissionsService.create).toHaveBeenCalledWith(
+      { name: 'docs', actions: ['read'] },
+      'actor-1',
+    );
+  });
+
+  it('delegates update() to the service', async () => {
+    permissionsService.update.mockResolvedValue({ id: 'perm-1' });
+
+    await controller.update('perm-1', { actions: ['read'] }, {});
+
+    expect(permissionsService.update).toHaveBeenCalledWith(
+      'perm-1',
+      { actions: ['read'] },
+      null,
+    );
+  });
+
+  it('delegates delete() to the service', async () => {
+    await controller.delete('perm-1', {});
+
+    expect(permissionsService.delete).toHaveBeenCalledWith('perm-1', null);
+  });
+});

@@ -725,8 +725,8 @@ describe('ImageConversionService', () => {
     const sources = [
       'image-conversion.service.ts',
       'image-conversion.controller.ts',
-      'image-format-detector.service.ts',
-      'image-format-registry.service.ts',
+      'detection/image-format-detector.service.ts',
+      'detection/image-format-registry.service.ts',
       'formats/svg.handler.ts',
       'formats/svg-security.ts',
       'formats/svg-intrinsic-size.ts',

@@ -16,21 +16,24 @@ import { UserStatus } from '@/modules/users/entities/user.entity';
 import { UsersService } from '@/modules/users/users.service';
 import { SettingsService } from '@/modules/settings/settings.service';
 import { AuthService } from './auth.service';
-import { ConfirmationChallengeService } from './confirmation-challenge.service';
-import { ConfirmationMailService } from './confirmation-mail.service';
+import { ConfirmationChallengeService } from '@/modules/auth/registration/confirmation-challenge.service';
+import { ConfirmationMailService } from '@/modules/auth/registration/confirmation-mail.service';
 import {
   RegistrationAuditEventType,
   RegistrationAuditOutcome,
 } from './entities/registration-audit-event.entity';
-import { RegistrationAuditService } from './registration-audit.service';
+import { RegistrationAuditService } from '@/modules/auth/registration/registration-audit.service';
 import {
   LoginAuditEventType,
   LoginAuditOutcome,
 } from './entities/login-audit-event.entity';
-import { LoginAuditService } from './login-audit.service';
-import { TokenService, TokenVerificationError } from './token.service';
-import { LoginChallengeService } from './login-challenge.service';
-import { AuthSessionService } from './auth-session.service';
+import { LoginAuditService } from '@/modules/auth/login/login-audit.service';
+import {
+  TokenService,
+  TokenVerificationError,
+} from '@/modules/auth/session/token.service';
+import { LoginChallengeService } from '@/modules/auth/login/login-challenge.service';
+import { AuthSessionService } from '@/modules/auth/session/auth-session.service';
 import { SessionRevocationReason } from './entities/auth-session.entity';
 import { hashPassword } from './utils/password-hasher';
 

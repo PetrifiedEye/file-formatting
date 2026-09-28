@@ -2,8 +2,8 @@ import { Readable } from 'stream';
 
 import { ImageFormat } from '@/modules/conversion/conversion.enums';
 import { ConversionRetentionOutcome } from '@/modules/conversion/conversion.enums';
-import { ConversionHistoryService } from '@/modules/conversion/conversion-history.service';
-import { ConversionRetentionService } from '@/modules/conversion/conversion-retention.service';
+import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
+import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
 
 import { JpegHandler } from './formats/jpeg.handler';
 import { PngHandler } from './formats/png.handler';
@@ -18,8 +18,8 @@ import type {
   MultipartPart,
   MultipartSource,
 } from './image-conversion.service';
-import { ImageFormatDetectorService } from './image-format-detector.service';
-import { ImageFormatRegistryService } from './image-format-registry.service';
+import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
+import { ImageFormatRegistryService } from '@/modules/image-conversion/detection/image-format-registry.service';
 
 /**
  * A wired-up service over the real handlers, with history and retention

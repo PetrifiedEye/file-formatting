@@ -10,14 +10,14 @@ import { TransformationResultStorageModule } from '@/modules/transformation-resu
 import { User } from '@/modules/users/entities/user.entity';
 
 import { ConversionController } from './conversion.controller';
-import { ConversionHistoryService } from './conversion-history.service';
-import { ConversionRetentionService } from './conversion-retention.service';
+import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
+import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
 import { ConversionFormat } from './conversion.enums';
 import { ConversionService } from './conversion.service';
 import { ConversionRecord } from './entities/conversion-record.entity';
 import { ConversionStoredFile } from './entities/conversion-stored-file.entity';
-import { FormatDetectorService } from './format-detector.service';
-import { FormatRegistryService } from './format-registry.service';
+import { FormatDetectorService } from '@/modules/conversion/detection/format-detector.service';
+import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
 import { CsvHandler } from './formats/csv.handler';
 import { CONVERSION_LIMITS, FORMAT_HANDLERS } from './formats/format-handler';
 import type { ConversionLimits, FormatHandler } from './formats/format-handler';

@@ -14,7 +14,7 @@ import { AccessConfigService } from '@/modules/rbac/access-config.service';
 
 import { UserProfileAuditOutcome } from './entities/user-profile-audit-event.entity';
 import { User, UserStatus } from './entities/user.entity';
-import { UsersAuditService } from './users-audit.service';
+import { UsersAuditService } from '@/modules/users/profile/users-audit.service';
 import { UsersService } from './users.service';
 
 describe('UsersService', () => {

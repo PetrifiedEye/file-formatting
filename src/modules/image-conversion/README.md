@@ -236,7 +236,7 @@ the service. Discovery immediately advertises `webp→png`, `webp→jpeg`,
 `png→webp`, `jpeg→webp`, and `svg→webp`, and the pipeline immediately accepts
 exactly those — because both read the same capability set.
 
-`image-format-registry.service.spec.ts` asserts precisely this with a fake
+`detection/image-format-registry.service.spec.ts` asserts precisely this with a fake
 handler: the direction set widens, and no existing handler is consulted.
 
 ---
@@ -247,8 +247,9 @@ handler: the direction set widens, and no existing handler is consulted.
 image-conversion.controller.ts      the two routes; no conversion logic
 image-conversion.service.ts         the pipeline, deadline, semaphore, history
 image-conversion.constants.ts       signatures, media types, extension hints
-image-format-registry.service.ts    capabilities in, directions out
-image-format-detector.service.ts    magic-byte detection over a bounded prefix
+detection/
+  image-format-registry.service.ts  capabilities in, directions out
+  image-format-detector.service.ts  magic-byte detection over a bounded prefix
 formats/
   image-format-handler.ts           the capability contract + DI tokens
   raster-image.ts                   the hub and its construction invariants
