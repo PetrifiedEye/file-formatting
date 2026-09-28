@@ -13,11 +13,14 @@ import type {
   ImageConversionLimits,
   ImageFormatHandler,
 } from './formats/image-format-handler';
-import { ImageConversionService } from './image-conversion.service';
 import type {
   MultipartPart,
   MultipartSource,
-} from './image-conversion.service';
+} from '@/modules/conversion/upload/multipart-upload';
+
+import { ImageConversionService } from './image-conversion.service';
+import type { ImageConversionResult } from './image-conversion.service';
+import { ImageUploadPipe } from './image-upload.pipe';
 import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
 import { ImageFormatRegistryService } from '@/modules/image-conversion/detection/image-format-registry.service';
 
@@ -32,6 +35,12 @@ import { ImageFormatRegistryService } from '@/modules/image-conversion/detection
  */
 export interface ServiceHarness {
   service: ImageConversionService;
+  pipe: ImageUploadPipe;
+  /** What a request goes through: the upload pipe, then the service. */
+  execute(
+    userId: string,
+    request: MultipartSource,
+  ): Promise<ImageConversionResult>;
   history: { record: jest.Mock };
   retention: {
     finalize: jest.Mock;
@@ -76,7 +85,17 @@ export function buildService(
     limits,
   );
 
-  return { service, history, retention, limits };
+  const pipe = new ImageUploadPipe(service, registry);
+
+  return {
+    service,
+    pipe,
+    execute: async (userId, request) =>
+      service.execute(userId, await pipe.transform(request)),
+    history,
+    retention,
+    limits,
+  };
 }
 
 export interface RequestSpec {

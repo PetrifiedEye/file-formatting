@@ -810,6 +810,20 @@ describe('File Format Conversion (e2e)', () => {
       expect(direct.status).toBe(404);
     });
 
+    it('refuses a second file as a conversion error, not a 500', async () => {
+      // `@fastify/multipart` raises FST_FILES_LIMIT from its parts iterator
+      // under `files: 1`. That used to escape as `internal_error`.
+      const response = await request(baseUrl)
+        .post('/api/convert')
+        .set('Cookie', cookie)
+        .attach('file', fixture('sample.csv'), 'sample.csv')
+        .attach('file', fixture('sample.csv'), 'again.csv')
+        .field('targetFormat', 'json');
+
+      expect(response.status).toBe(413);
+      expect(response.body.code).toBe('input_too_large');
+    });
+
     it('refuses a malformed store flag', async () => {
       const response = await convert(
         fixture('sample.csv'),

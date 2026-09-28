@@ -6,7 +6,11 @@ import { ConversionRetentionOutcome } from './conversion.enums';
 import { ConversionException } from './conversion.exception';
 import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
 import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
-import { ConversionResult, ConversionService } from './conversion.service';
+import {
+  ConversionResult,
+  ConversionService,
+  DocumentUpload,
+} from './conversion.service';
 import { FormatDetectorService } from '@/modules/conversion/detection/format-detector.service';
 import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
 import { CsvHandler } from './formats/csv.handler';
@@ -14,7 +18,7 @@ import type { ConversionLimits } from './formats/format-handler';
 import { JsonHandler } from './formats/json.handler';
 import { XmlHandler } from './formats/xml.handler';
 import { YamlHandler } from './formats/yaml.handler';
-import { UploadReader } from './upload-reader';
+import { UploadReader } from '@/modules/conversion/upload/upload-reader';
 
 const baseLimits: ConversionLimits = {
   maxInputBytes: {
@@ -456,28 +460,25 @@ describe('ConversionService', () => {
   });
 
   describe('history-first retention finalization', () => {
-    const collect = (
-      retentionRequested: boolean,
-    ): Parameters<ConversionService['execute']>[1] => {
-      return (state) => {
-        state.originalFileName = 'sample.csv';
-        state.sourceFormat = ConversionFormat.CSV;
-        state.targetFormat = ConversionFormat.JSON;
-        state.inputSizeBytes = Buffer.byteLength(
-          FIXTURES[ConversionFormat.CSV],
-        );
-        state.retentionRequested = retentionRequested;
+    const attempt = (retentionRequested: boolean) => ({
+      startedAt: new Date(),
+      originalFileName: 'sample.csv',
+      sourceFormat: ConversionFormat.CSV,
+      targetFormat: ConversionFormat.JSON,
+      inputSizeBytes: Buffer.byteLength(FIXTURES[ConversionFormat.CSV]),
+      retentionRequested,
+    });
 
-        return Promise.resolve({
-          received: {
-            text: FIXTURES[ConversionFormat.CSV],
-            sourceFormat: ConversionFormat.CSV,
-            sizeBytes: state.inputSizeBytes,
-          },
-          targetFormat: ConversionFormat.JSON,
-        });
-      };
-    };
+    const collect = (retentionRequested: boolean): DocumentUpload => ({
+      ok: true,
+      attempt: attempt(retentionRequested),
+      received: {
+        text: FIXTURES[ConversionFormat.CSV],
+        sourceFormat: ConversionFormat.CSV,
+        sizeBytes: Buffer.byteLength(FIXTURES[ConversionFormat.CSV]),
+      },
+      targetFormat: ConversionFormat.JSON,
+    });
 
     it('preserves result bytes and metadata while using the shared finalizer', async () => {
       const harness = executionHarness();
@@ -521,9 +522,10 @@ describe('ConversionService', () => {
       const harness = executionHarness();
       const failure = new ConversionException(ConversionErrorCode.PARSE_ERROR);
 
-      const execution = harness.service.execute('user-1', (state) => {
-        state.retentionRequested = true;
-        return Promise.reject(failure);
+      const execution = harness.service.execute('user-1', {
+        ok: false,
+        attempt: { ...attempt(true), sourceFormat: null, targetFormat: null },
+        failure,
       });
 
       await expect(execution).rejects.toBe(failure);

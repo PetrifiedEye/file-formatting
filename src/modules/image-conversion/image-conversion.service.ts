@@ -1,7 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { Readable } from 'stream';
 
-import { validateWithSchema } from '@/core/validation/joi-validation';
 import { ConversionErrorCode } from '@/modules/conversion/conversion.constants';
 import {
   ImageFormat,
@@ -11,63 +9,25 @@ import {
 import { ConversionException } from '@/modules/conversion/conversion.exception';
 import { ConversionHistoryService } from '@/modules/conversion/history/conversion-history.service';
 import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
-import { UploadReader } from '@/modules/conversion/upload-reader';
+import type {
+  CollectedUpload,
+  UploadAttempt,
+} from '@/modules/conversion/upload/multipart-upload';
+import { UploadReader } from '@/modules/conversion/upload/upload-reader';
 
-import {
-  ConvertImageRequestDto,
-  convertImageRequestDtoSchema,
-} from './dto/convert-image-request.dto';
 import { IMAGE_CONVERSION_LIMITS } from './formats/image-format-handler';
 import type { ImageConversionLimits } from './formats/image-format-handler';
 import { ImageFormatDetectorService } from '@/modules/image-conversion/detection/image-format-detector.service';
 import { ImageFormatRegistryService } from '@/modules/image-conversion/detection/image-format-registry.service';
 
-/**
- * The part of a Fastify request this service needs, and nothing more.
- *
- * Declared structurally rather than imported so the pipeline can be unit-tested
- * against a hand-rolled iterable — and so the one genuinely HTTP-shaped thing
- * here, reading a multipart body, does not drag the whole framework into every
- * test of the conversion logic.
- */
-export interface MultipartSource {
-  isMultipart(): boolean;
-  parts(options: {
-    limits: { fileSize: number; files: number };
-  }): AsyncIterableIterator<MultipartPart>;
-}
-
-export type MultipartPart =
-  | {
-      type: 'file';
-      fieldname: string;
-      filename?: string;
-      file: Readable;
-      toBuffer(): Promise<Buffer>;
-    }
-  | { type: 'field'; fieldname: string; value: unknown };
-
-/**
- * What the request has revealed about itself so far.
- *
- * Filled in progressively, because an attempt can fail before any of it is
- * known — an undetectable file has no source format, and a request naming an
- * unsupported target has no target. The history row records whatever was true
- * at the point of failure.
- */
-interface AttemptState {
-  originalFileName: string;
-  sourceFormat: ImageFormat | null;
-  targetFormat: ImageFormat | null;
-  inputSizeBytes: number;
-  retentionRequested: boolean;
-}
-
 /** What the boundary produced: the bytes and the format they are in. */
-interface ReceivedUpload {
+export interface ReceivedImage {
   bytes: Buffer;
   sourceFormat: ImageFormat;
 }
+
+/** An image upload as read by `ImageUploadPipe`. */
+export type ImageUpload = CollectedUpload<ReceivedImage, ImageFormat>;
 
 export interface ImageConversionResult {
   buffer: Buffer;
@@ -78,9 +38,6 @@ export interface ImageConversionResult {
   inputSizeBytes: number;
   retentionOutcome: ConversionRetentionOutcome;
 }
-
-const FILE_PART = 'file';
-const FIELD_PARTS = ['targetFormat', 'store'];
 
 /**
  * The image conversion pipeline, in the order the contract fixes.
@@ -134,25 +91,22 @@ export class ImageConversionService {
    */
   async execute(
     userId: string,
-    request: MultipartSource,
+    upload: ImageUpload,
   ): Promise<ImageConversionResult> {
-    const startedAt = new Date();
-    const startedMs = Date.now();
-    const state: AttemptState = {
-      originalFileName: '',
-      sourceFormat: null,
-      targetFormat: null,
-      inputSizeBytes: 0,
-      retentionRequested: false,
-    };
+    const state = upload.attempt;
+    const startedAt = state.startedAt;
 
     let result: ImageConversionResult | undefined;
     let failure: unknown;
 
     try {
-      const collected = await this.collect(request, state);
+      // A refusal while reading the body (`ImageUploadPipe`) is recorded here
+      // exactly like a failed conversion, then raised.
+      if (!upload.ok) {
+        throw upload.failure;
+      }
 
-      result = await this.convert(collected.received, collected.targetFormat);
+      result = await this.convert(upload.received, upload.targetFormat);
 
       if (state.retentionRequested) {
         // Pessimistic until history-first finalization durably links the file.
@@ -164,7 +118,7 @@ export class ImageConversionService {
       failure = error;
       throw error;
     } finally {
-      const durationMs = Date.now() - startedMs;
+      const durationMs = Date.now() - startedAt.getTime();
 
       // Written first, and outside any transaction, so nothing later can erase
       // the record of the attempt. It claims `failed` for a file that is on
@@ -228,139 +182,6 @@ export class ImageConversionService {
   }
 
   /**
-   * Read the multipart body, consuming the file under a byte budget.
-   *
-   * The file part is consumed as it arrives rather than buffered for later:
-   * `busboy` will not advance to the next part until the current one is
-   * drained, and consuming it under the per-format budget is the only way an
-   * oversized upload can be refused without being read to the end (SC-008).
-   *
-   * The consequence, stated rather than hidden: a request that is both
-   * oversized *and* missing `targetFormat` is answered 413, not 400. The field
-   * may legitimately arrive after the file, so there is no ordering in which
-   * both refusals could take precedence.
-   */
-  private async collect(
-    request: MultipartSource,
-    state: AttemptState,
-  ): Promise<{ received: ReceivedUpload; targetFormat: ImageFormat }> {
-    if (!request.isMultipart()) {
-      throw new ConversionException(ConversionErrorCode.MISSING_FILE);
-    }
-
-    const fields: Record<string, string> = {};
-    let received: ReceivedUpload | undefined;
-
-    // Per-call limits: the global registration in `main.ts` keeps its own
-    // `PHOTO_MAX_SIZE_BYTES` ceiling for the photo route and is not loosened.
-    const parts = request.parts({
-      limits: { fileSize: this.registry.maxConfiguredInputBytes(), files: 1 },
-    });
-
-    try {
-      await this.readParts(parts, state, fields, (upload) => {
-        received = upload;
-      });
-    } catch (error) {
-      throw this.translateMultipartError(error);
-    }
-
-    const validated = this.validateFields(fields);
-
-    state.targetFormat = validated.targetFormat;
-    state.retentionRequested = validated.store === 'true';
-
-    if (!received) {
-      throw new ConversionException(ConversionErrorCode.MISSING_FILE);
-    }
-
-    return { received, targetFormat: validated.targetFormat };
-  }
-
-  /**
-   * `@fastify/multipart` enforces its own `fileSize` ceiling and aborts the
-   * part itself once it is passed.
-   *
-   * That ceiling is the largest configured per-format limit, so for an upload
-   * of the most permissive format it and our own budget coincide and either
-   * may fire first. It is the same refusal, so it is reported the same way
-   * rather than escaping as a bare library error with no `code` — a caller
-   * must not have to tell two shapes of 413 apart depending on which format
-   * they happened to send.
-   */
-  private translateMultipartError(error: unknown): unknown {
-    const code = (error as { code?: string } | undefined)?.code;
-
-    if (code === 'FST_REQ_FILE_TOO_LARGE' || code === 'FST_FILES_LIMIT') {
-      return new ConversionException(ConversionErrorCode.INPUT_TOO_LARGE, {
-        limit: this.registry.maxConfiguredInputBytes(),
-      });
-    }
-
-    return error;
-  }
-
-  private async readParts(
-    parts: AsyncIterableIterator<MultipartPart>,
-    state: AttemptState,
-    fields: Record<string, string>,
-    onFile: (received: ReceivedUpload) => void,
-  ): Promise<void> {
-    let seenFile = false;
-
-    for await (const part of parts) {
-      if (part.type === 'file') {
-        if (part.fieldname !== FILE_PART || seenFile) {
-          // Drain before refusing: an undrained part stalls the iterator.
-          await part.toBuffer().catch(() => undefined);
-          throw new ConversionException(ConversionErrorCode.UNEXPECTED_PART);
-        }
-
-        state.originalFileName = part.filename ?? '';
-
-        const reader = new UploadReader(part.file, {
-          hardLimit: this.registry.maxConfiguredInputBytes(),
-        });
-
-        try {
-          const upload = await this.receive(
-            reader,
-            state.originalFileName,
-            (format) => {
-              // Recorded the moment detection settles, not when the read
-              // completes: a 413 is raised in between, and the row should say
-              // what the file was rather than leaving the format unknown.
-              state.sourceFormat = format;
-            },
-          );
-
-          seenFile = true;
-          onFile(upload);
-        } finally {
-          // Read from the reader rather than the result, so a refusal records
-          // a size too. For a 413 this is where the budget was exceeded —
-          // deliberately not the file's true size, because the rest of it was
-          // never read (SC-008).
-          state.inputSizeBytes = reader.bytesRead;
-        }
-        continue;
-      }
-
-      if (!FIELD_PARTS.includes(part.fieldname) || part.fieldname in fields) {
-        throw new ConversionException(ConversionErrorCode.UNEXPECTED_PART);
-      }
-
-      fields[part.fieldname] = String(part.value);
-
-      // Recorded as soon as it is seen, not after validation: an attempt that
-      // fails later should still show what the caller asked for.
-      if (part.fieldname === 'store') {
-        state.retentionRequested = fields.store === 'true';
-      }
-    }
-  }
-
-  /**
    * Decide what the upload is, then consume it under *that* format's budget.
    *
    * Detection happens on the bounded prefix and before a single further byte
@@ -377,12 +198,13 @@ export class ImageConversionService {
    * The reader destroys the stream the moment the budget is passed, so an
    * oversized upload is refused without being read to the end (SC-008). This
    * is what makes the same byte count acceptable as PNG and refused as SVG.
+   *
+   * Called by `ImageUploadPipe` while the file part's stream is still open.
    */
-  private async receive(
+  async receive(
     reader: UploadReader,
-    originalFileName: string,
-    onDetected: (format: ImageFormat) => void,
-  ): Promise<ReceivedUpload> {
+    attempt: UploadAttempt<ImageFormat>,
+  ): Promise<ReceivedImage> {
     const prefix = await reader.readPrefix();
 
     if (prefix.length === 0) {
@@ -390,9 +212,15 @@ export class ImageConversionService {
     }
 
     // Nothing recognises it: refuse now rather than reading megabytes first.
-    const sourceFormat = this.detector.require(prefix, originalFileName);
+    const sourceFormat = this.detector.require(
+      prefix,
+      attempt.originalFileName,
+    );
 
-    onDetected(sourceFormat);
+    // Recorded the moment detection settles, not when the read completes: a
+    // 413 is raised in between, and the row should say what the file was
+    // rather than leaving the format unknown.
+    attempt.sourceFormat = sourceFormat;
 
     return {
       bytes: await reader.readAll(this.registry.maxInputBytesFor(sourceFormat)),
@@ -400,46 +228,9 @@ export class ImageConversionService {
     };
   }
 
-  /**
-   * Validate the non-file parts explicitly.
-   *
-   * The global validation pipe never sees a multipart body, so the DTO is
-   * applied by hand here rather than being quietly skipped. Each field has its
-   * own code so a caller can tell the refusals apart.
-   */
-  private validateFields(
-    fields: Record<string, string>,
-  ): ConvertImageRequestDto {
-    if (fields.targetFormat === undefined) {
-      throw new ConversionException(ConversionErrorCode.MISSING_TARGET_FORMAT);
-    }
-
-    const result = validateWithSchema(convertImageRequestDtoSchema, fields);
-
-    if (!result.ok) {
-      // Each field has its own code so the caller can tell the refusals apart.
-      throw new ConversionException(
-        result.failedKeys[0] === 'store'
-          ? ConversionErrorCode.INVALID_STORE_FLAG
-          : ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
-      );
-    }
-
-    const dto = result.value;
-
-    // A format may be spelled correctly and still have no handler registered.
-    if (!this.registry.handlerFor(dto.targetFormat)) {
-      throw new ConversionException(
-        ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
-      );
-    }
-
-    return dto;
-  }
-
   /** The conversion itself, under the time budget and the concurrency bound. */
   private async convert(
-    received: ReceivedUpload,
+    received: ReceivedImage,
     targetFormat: ImageFormat,
   ): Promise<ImageConversionResult> {
     const deadline = this.startDeadline();
@@ -485,7 +276,7 @@ export class ImageConversionService {
   }
 
   private async runPipeline(
-    received: ReceivedUpload,
+    received: ReceivedImage,
     targetFormat: ImageFormat,
     deadline: Deadline,
   ): Promise<ImageConversionResult> {
@@ -573,7 +364,7 @@ export class ImageConversionService {
    */
   private log(
     userId: string,
-    state: AttemptState,
+    state: UploadAttempt<ImageFormat>,
     failure: unknown,
     durationMs: number,
   ): void {

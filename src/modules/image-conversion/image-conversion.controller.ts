@@ -33,6 +33,7 @@ import {
   ConversionRetentionOutcome,
 } from '@/modules/conversion/conversion.enums';
 import { ConversionErrorResponseDto } from '@/modules/conversion/dto/conversion-error-response.dto';
+import { MultipartUpload } from '@/modules/conversion/upload/multipart-upload';
 
 import { SupportedImageFormatsResponseDto } from './dto/supported-image-formats-response.dto';
 import {
@@ -42,8 +43,9 @@ import {
 import { ImageConversionService } from './image-conversion.service';
 import type {
   ImageConversionResult,
-  MultipartSource,
+  ImageUpload,
 } from './image-conversion.service';
+import { ImageUploadPipe } from './image-upload.pipe';
 
 interface RequestWithUser extends FastifyRequest {
   user: RequestUser;
@@ -195,12 +197,10 @@ export class ImageConversionController {
   })
   async convert(
     @Req() request: RequestWithUser,
+    @MultipartUpload(ImageUploadPipe) upload: ImageUpload,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    const result = await this.images.execute(
-      request.user.id,
-      request as unknown as MultipartSource,
-    );
+    const result = await this.images.execute(request.user.id, upload);
 
     this.send(reply, result);
   }

@@ -3,8 +3,8 @@ import { Readable } from 'stream';
 import {
   ConversionErrorCode,
   DETECTION_PREFIX_BYTES,
-} from './conversion.constants';
-import { ConversionException } from './conversion.exception';
+} from '@/modules/conversion/conversion.constants';
+import { ConversionException } from '@/modules/conversion/conversion.exception';
 
 export interface UploadReaderOptions {
   /** How much to buffer before the source format is decided. */

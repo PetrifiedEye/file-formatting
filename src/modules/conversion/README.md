@@ -272,6 +272,24 @@ plus the applicable limit, never the file.
 why a 413's row shows the point at which the budget was exceeded rather than
 the size of the file the caller tried to send.
 
+## Reading the request
+
+`POST /api/convert` and `POST /api/images/convert` read their multipart body in
+a pipe, not in the controller or the service: `@MultipartUpload(DocumentUploadPipe)`
+and `@MultipartUpload(ImageUploadPipe)`. Both extend `upload/MultipartUploadPipe`,
+which owns what the two routes share — exactly one `file` part, `targetFormat`
+and `store` in any order, drain-before-refuse, Joi validation of the fields and
+their error codes, and the translation of `@fastify/multipart`'s own limits
+(`FST_FILES_LIMIT`, `FST_REQ_FILE_TOO_LARGE`, `FST_PARTS_LIMIT`) into
+`input_too_large`. Each subclass supplies only how its file is consumed, which
+still happens while the stream is open (see below).
+
+A refusal in the pipe is **returned, not thrown**: `CollectedUpload` carries
+the failure together with what was learned before it (file name, bytes read,
+`store`, source format). The service raises it from inside `execute`, so a
+refused request gets its history row and log line exactly like a failed
+conversion, and the attempt's clock starts when the pipe began reading.
+
 ## Adding a fifth format (SC-009)
 
 Adding TOML is one new file and one provider entry. Nothing below is edited:

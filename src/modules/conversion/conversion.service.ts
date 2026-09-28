@@ -14,29 +14,14 @@ import { FormatRegistryService } from '@/modules/conversion/detection/format-reg
 import { guardStructure } from './formats/document-node';
 import { CONVERSION_LIMITS } from './formats/format-handler';
 import type { ConversionLimits } from './formats/format-handler';
-import { UploadReader } from './upload-reader';
+import type {
+  CollectedUpload,
+  UploadAttempt,
+} from '@/modules/conversion/upload/multipart-upload';
+import { UploadReader } from '@/modules/conversion/upload/upload-reader';
 
-/**
- * What the request has revealed about itself so far.
- *
- * Filled in progressively, because an attempt can fail before any of it is
- * known — a document whose format is undetectable has no source format, and a
- * request naming an unsupported target has no target. The history row records
- * whatever was true at the point of failure.
- */
-export interface AttemptState {
-  originalFileName: string;
-  sourceFormat: ConversionFormat | null;
-  targetFormat: ConversionFormat | null;
-  inputSizeBytes: number;
-  retentionRequested: boolean;
-}
-
-/** What the controller produces once every part has been seen. */
-export interface CollectedRequest {
-  received: ReceivedUpload;
-  targetFormat: ConversionFormat;
-}
+/** A document upload as read by `DocumentUploadPipe`. */
+export type DocumentUpload = CollectedUpload<ReceivedUpload, ConversionFormat>;
 
 /** What the boundary produced: a decoded document and the format it is in. */
 export interface ReceivedUpload {
@@ -59,9 +44,10 @@ export interface ConversionResult {
  * The conversion pipeline, in the order the contract fixes.
  *
  * It is split in two because the multipart stream forces it to be. {@link
- * receive} runs while that stream is still open — the only moment at which the
- * remainder of an oversized upload can be left unread (SC-006) — and {@link
- * convert} runs once every part has been seen and the fields are validated.
+ * receive} runs while that stream is still open — `DocumentUploadPipe` calls it
+ * as the file part arrives, the only moment at which the remainder of an
+ * oversized upload can be left unread (SC-006) — and {@link convert} runs once
+ * every part has been seen and the fields are validated.
  *
  * The result is serialized **completely into a buffer** before the caller is
  * told anything, which is what makes a partial file unrepresentable (FR-008).
@@ -94,9 +80,11 @@ export class ConversionService {
   /**
    * One attempt, start to finish, recorded whatever happens.
    *
-   * `collect` is supplied by the controller because reading a multipart body is
-   * an HTTP concern; everything around it — the clock, the history row, the log
-   * line — belongs here.
+   * Reading the multipart body is an HTTP concern and happens first, in
+   * `DocumentUploadPipe`; a refusal there arrives here as `upload.failure`
+   * together with everything learned before it. Everything around the
+   * conversion — the history row, the log line — belongs here, and the clock
+   * runs from when the pipe began reading.
    *
    * The record is written from a `finally` and **outside any transaction**, so
    * it survives every failure path: a refused request, a parse error, a rollback
@@ -105,24 +93,20 @@ export class ConversionService {
    */
   async execute(
     userId: string,
-    collect: (state: AttemptState) => Promise<CollectedRequest>,
+    upload: DocumentUpload,
   ): Promise<ConversionResult> {
-    const startedAt = new Date();
-    const startedMs = Date.now();
-    const state: AttemptState = {
-      originalFileName: '',
-      sourceFormat: null,
-      targetFormat: null,
-      inputSizeBytes: 0,
-      retentionRequested: false,
-    };
+    const state = upload.attempt;
+    const startedAt = state.startedAt;
 
     let result: ConversionResult | undefined;
     let failure: unknown;
 
     try {
-      const collected = await collect(state);
-      result = await this.convert(collected.received, collected.targetFormat);
+      if (!upload.ok) {
+        throw upload.failure;
+      }
+
+      result = await this.convert(upload.received, upload.targetFormat);
 
       if (state.retentionRequested) {
         // Pessimistic until history-first finalization durably links the file.
@@ -134,7 +118,7 @@ export class ConversionService {
       failure = error;
       throw error;
     } finally {
-      const durationMs = Date.now() - startedMs;
+      const durationMs = Date.now() - startedAt.getTime();
 
       // Written first, and outside any transaction, so that nothing later can
       // erase the record of the attempt (FR-024). It claims `failed` for a
@@ -209,7 +193,7 @@ export class ConversionService {
    */
   private log(
     userId: string,
-    state: AttemptState,
+    state: UploadAttempt<ConversionFormat>,
     failure: unknown,
     durationMs: number,
   ): void {

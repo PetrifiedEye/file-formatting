@@ -10,6 +10,7 @@ import { ConversionHistoryService } from '@/modules/conversion/history/conversio
 import { ConversionRetentionService } from '@/modules/conversion/history/conversion-retention.service';
 import { FormatDetectorService } from '@/modules/conversion/detection/format-detector.service';
 import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
+import { DocumentUploadPipe } from '@/modules/conversion/upload/document-upload.pipe';
 import { CsvHandler } from './formats/csv.handler';
 import type { ConversionLimits, FormatHandler } from './formats/format-handler';
 import { JsonHandler } from './formats/json.handler';
@@ -112,7 +113,7 @@ function controllerWith(
     new YamlHandler(),
   ],
 ): {
-  controller: ConversionController;
+  controller: ControllerUnderTest;
   registry: FormatRegistryService;
   retention: ConversionRetentionService;
 } {
@@ -137,11 +138,25 @@ function controllerWith(
     limits,
   );
 
+  const controller = new ConversionController(service, registry);
+  const pipe = new DocumentUploadPipe(service, registry);
+
   return {
-    controller: new ConversionController(service, registry),
+    controller: {
+      supportedFormats: () => controller.supportedFormats(),
+      // What Nest does for the route: the upload pipe reads the body, then
+      // the handler runs with what it produced.
+      convert: async (request, reply) =>
+        controller.convert(request, await pipe.transform(request), reply),
+    },
     registry,
     retention,
   };
+}
+
+interface ControllerUnderTest {
+  supportedFormats: ConversionController['supportedFormats'];
+  convert(request: never, reply: never): Promise<void>;
 }
 
 describe('ConversionController', () => {

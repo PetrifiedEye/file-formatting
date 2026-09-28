@@ -29,31 +29,19 @@ import {
   JwtAuthGuard,
   RequestUser,
 } from '@/modules/auth/guards/jwt-auth.guard';
-import { validateWithSchema } from '@/core/validation/joi-validation';
 
-import {
-  CONVERTED_FILE_BASE_NAME,
-  ConversionErrorCode,
-} from './conversion.constants';
+import { CONVERTED_FILE_BASE_NAME } from './conversion.constants';
 import {
   ConversionFormat,
   ConversionRetentionOutcome,
 } from './conversion.enums';
-import { ConversionException } from './conversion.exception';
 import { ConversionService } from './conversion.service';
-import type {
-  AttemptState,
-  ConversionResult,
-  ReceivedUpload,
-} from './conversion.service';
+import type { ConversionResult, DocumentUpload } from './conversion.service';
 import { ConversionErrorResponseDto } from './dto/conversion-error-response.dto';
-import {
-  ConvertRequestDto,
-  convertRequestDtoSchema,
-} from './dto/convert-request.dto';
 import { SupportedFormatsResponseDto } from './dto/supported-formats-response.dto';
 import { FormatRegistryService } from '@/modules/conversion/detection/format-registry.service';
-import { UploadReader } from './upload-reader';
+import { DocumentUploadPipe } from '@/modules/conversion/upload/document-upload.pipe';
+import { MultipartUpload } from '@/modules/conversion/upload/multipart-upload';
 
 interface RequestWithUser extends FastifyRequest {
   user: RequestUser;
@@ -65,9 +53,6 @@ const RETENTION_HEADER_VALUES: Record<ConversionRetentionOutcome, string> = {
   [ConversionRetentionOutcome.STORED]: 'stored',
   [ConversionRetentionOutcome.FAILED]: 'failed',
 };
-
-const FILE_PART = 'file';
-const FIELD_PARTS = ['targetFormat', 'store'];
 
 /**
  * `POST /api/convert` and `GET /api/convert/formats`.
@@ -199,147 +184,18 @@ export class ConversionController {
   })
   async convert(
     @Req() request: RequestWithUser,
+    // Reading the multipart body — the one genuinely HTTP part of the work —
+    // is the pipe's; the attempt itself (clock, history row, log line) is the
+    // service's.
+    @MultipartUpload(DocumentUploadPipe) upload: DocumentUpload,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    // The service owns the attempt: the clock, the history row, and the log
-    // line. All the controller contributes is the part of the work that is
-    // genuinely HTTP — reading a multipart body — and the response.
     const result = await this.conversionService.execute(
       request.user.id,
-      async (state) => {
-        const collected = await this.collectParts(request, state);
-        const fields = this.validateFields(collected.fields);
-
-        state.targetFormat = fields.targetFormat;
-        state.retentionRequested = fields.store === 'true';
-
-        if (!collected.received) {
-          throw new ConversionException(ConversionErrorCode.MISSING_FILE);
-        }
-
-        return {
-          received: collected.received,
-          targetFormat: fields.targetFormat,
-        };
-      },
+      upload,
     );
 
     this.send(reply, result);
-  }
-
-  /**
-   * Read the multipart body.
-   *
-   * The file part is consumed here, as it arrives, rather than buffered for
-   * later: `busboy` will not advance to the next part until the current one is
-   * drained, and consuming it under the per-format budget is the only way an
-   * oversized upload can be refused without being read to the end (SC-006).
-   *
-   * The consequence, stated rather than hidden: a request that is both
-   * oversized *and* missing `targetFormat` is answered 413, not 400. The field
-   * may legitimately arrive after the file, so there is no ordering in which
-   * both refusals could take precedence.
-   */
-  private async collectParts(
-    request: RequestWithUser,
-    state: AttemptState,
-  ): Promise<{
-    received?: ReceivedUpload;
-    fields: Record<string, string>;
-  }> {
-    if (!request.isMultipart()) {
-      throw new ConversionException(ConversionErrorCode.MISSING_FILE);
-    }
-
-    const fields: Record<string, string> = {};
-    let received: ReceivedUpload | undefined;
-
-    // Per-call limits: the global registration in `main.ts` keeps its own
-    // `PHOTO_MAX_SIZE_BYTES` ceiling for the photo route and is not loosened.
-    const parts = request.parts({
-      limits: { fileSize: this.registry.maxConfiguredInputBytes(), files: 1 },
-    });
-
-    for await (const part of parts) {
-      if (part.type === 'file') {
-        if (part.fieldname !== FILE_PART || received) {
-          // Drain before refusing: an undrained part stalls the iterator.
-          await part.toBuffer().catch(() => undefined);
-          throw new ConversionException(ConversionErrorCode.UNEXPECTED_PART);
-        }
-
-        state.originalFileName = part.filename ?? '';
-
-        const reader = new UploadReader(part.file, {
-          hardLimit: this.registry.maxConfiguredInputBytes(),
-        });
-
-        try {
-          received = await this.conversionService.receive(
-            reader,
-            state.originalFileName,
-          );
-          state.sourceFormat = received.sourceFormat;
-        } finally {
-          // Read from the reader rather than the result, so a refusal records
-          // a size too. For a 413 this is the point at which the budget was
-          // exceeded — deliberately not the file's true size, because the rest
-          // of it was never read (SC-006).
-          state.inputSizeBytes = reader.bytesRead;
-        }
-        continue;
-      }
-
-      if (!FIELD_PARTS.includes(part.fieldname) || part.fieldname in fields) {
-        throw new ConversionException(ConversionErrorCode.UNEXPECTED_PART);
-      }
-
-      fields[part.fieldname] = String(part.value);
-
-      // Recorded as soon as it is seen, not after validation: an attempt that
-      // fails later should still show what the caller asked for. A `store`
-      // arriving *after* the file part cannot be recovered if the file itself
-      // is refused — nothing has been sent yet at that point.
-      if (part.fieldname === 'store') {
-        state.retentionRequested = fields.store === 'true';
-      }
-    }
-
-    return { received, fields };
-  }
-
-  /**
-   * Validate the non-file parts explicitly.
-   *
-   * The global validation pipe never sees a multipart body, so the DTO is
-   * applied by hand here rather than being quietly skipped.
-   */
-  private validateFields(fields: Record<string, string>): ConvertRequestDto {
-    if (fields.targetFormat === undefined) {
-      throw new ConversionException(ConversionErrorCode.MISSING_TARGET_FORMAT);
-    }
-
-    const result = validateWithSchema(convertRequestDtoSchema, fields);
-
-    if (!result.ok) {
-      // Each field has its own code so the caller can tell the refusals apart.
-      throw new ConversionException(
-        result.failedKeys[0] === 'store'
-          ? ConversionErrorCode.INVALID_STORE_FLAG
-          : ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
-      );
-    }
-
-    const dto = result.value;
-
-    // A format may be spelled correctly and still have no handler registered.
-    if (!this.registry.handlerFor(dto.targetFormat)) {
-      throw new ConversionException(
-        ConversionErrorCode.UNSUPPORTED_TARGET_FORMAT,
-      );
-    }
-
-    return dto;
   }
 
   /**

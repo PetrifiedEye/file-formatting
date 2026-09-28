@@ -722,6 +722,18 @@ describe('Image Conversion (e2e)', () => {
       expect(response.body.code).toBe('unexpected_part');
     });
 
+    it('refuses a second file as a conversion error, not a 500', async () => {
+      const response = await request(baseUrl)
+        .post('/api/images/convert')
+        .set('Cookie', cookie)
+        .attach('file', fixture('solid.png'), 'solid.png')
+        .attach('file', fixture('solid.png'), 'again.png')
+        .field('targetFormat', 'jpeg');
+
+      expect(response.status).toBe(413);
+      expect(response.body.code).toBe('input_too_large');
+    });
+
     it('refuses a request with no file part', async () => {
       const response = await request(baseUrl)
         .post('/api/images/convert')

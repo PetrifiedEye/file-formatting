@@ -14,8 +14,8 @@ const USER = 'user-1';
 async function convert(
   harness: ServiceHarness,
   spec: RequestSpec,
-): Promise<ReturnType<typeof harness.service.execute>> {
-  return harness.service.execute(USER, fakeRequest(spec));
+): Promise<ReturnType<typeof harness.execute>> {
+  return harness.execute(USER, fakeRequest(spec));
 }
 
 async function refusalOf(

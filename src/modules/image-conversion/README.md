@@ -245,6 +245,7 @@ handler: the direction set widens, and no existing handler is consulted.
 
 ```
 image-conversion.controller.ts      the two routes; no conversion logic
+image-upload.pipe.ts                reads the multipart body (see the conversion README)
 image-conversion.service.ts         the pipeline, deadline, semaphore, history
 image-conversion.constants.ts       signatures, media types, extension hints
 detection/

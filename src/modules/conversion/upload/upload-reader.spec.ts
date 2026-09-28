@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 
-import { ConversionException } from './conversion.exception';
+import { ConversionException } from '@/modules/conversion/conversion.exception';
 import { UploadReader } from './upload-reader';
 
 /**
